@@ -2,6 +2,7 @@ from dotenv import load_dotenv
 import os
 import json
 from utils.riot_api import (
+    get_match_result,
     get_puuid_by_riot_id,
     get_player_matches_ids,
     get_match_timeline,
@@ -29,6 +30,11 @@ if __name__ == "__main__":
     print(f"Match IDs: {match_ids}")
 
     last, *_ = match_ids
+
+    match_result = get_match_result(api_key=API_KEY, region=region, match_id=last)
+    print(f"Match Result: {match_result}")
+    with open("match_result.json", "w") as f:
+        json.dump(match_result, f, indent=4)
 
     # Get Match Timeline by Match ID
     match_timeline = get_match_timeline(api_key=API_KEY, region=region, match_id=last)

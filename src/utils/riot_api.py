@@ -32,6 +32,20 @@ def get_player_matches_ids(api_key, region, puuid):
         return None
 
 
+def get_match_result(api_key, region, match_id):
+    url = f"https://{region}.api.riotgames.com/lol/match/v5/matches/{match_id}"
+
+    headers = {"X-Riot-Token": api_key}
+    response = requests.get(url, headers=headers)
+
+    if response.status_code == 200:
+        data = response.json()
+        return data
+    else:
+        print(f"Error: {response.status_code}, {response.text}")
+        return None
+
+
 def get_match_timeline(api_key, region, match_id):
     url = f"https://{region}.api.riotgames.com/lol/match/v5/matches/{match_id}/timeline"
 
