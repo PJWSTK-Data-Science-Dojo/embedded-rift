@@ -90,6 +90,45 @@ def get_apex_tiers_summoner_ids(api_key, platform):
     return summoner_ids
 
 
+def get_summoner_ids_by_rank(api_key, platform, tier, division, count=-1):
+    """
+
+    :param api_key:
+    :param platform:
+    :param tier: One of ['DIAMOND', 'EMERALD', 'PLATINUM', 'GOLD', 'SILVER', 'BRONZE', 'IRON']
+    :param division: One of ['I', 'II', 'III', 'IV']
+    :param count: How many pages to load. One page contains 205 summoner ids. Defaults to -1
+    :return: List of dictionaries
+    """
+    headers = {"X-Riot-Token": api_key}
+    page = 1
+
+    limit = True
+    if count < 0:
+        limit = False
+
+    summoner_ids = []
+    while not limit or page <= count:
+        params = {
+            "page": page,
+        }
+        page += 1
+
+        url = f"https://{platform}.api.riotgames.com/lol/league/v4/entries/{QUEUE}/{tier}/{division}"
+
+        response = requests.get(url, headers=headers, params=params)
+        if response.status_code == 200:
+            data = response.json()
+            if data:
+                summoner_ids.extend([{'summonerId': summoner['summonerId']} for summoner in data])
+            else:
+                break
+        else:
+            print(f"Error: {response.status_code}, {response.text}")
+            break
+    return summoner_ids
+
+
 def get_match_result(api_key, region, match_id):
     url = f"https://{region}.api.riotgames.com/lol/match/v5/matches/{match_id}"
 
