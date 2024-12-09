@@ -2,15 +2,7 @@ from dotenv import load_dotenv
 import os
 import json
 from datetime import datetime
-from utils.riot_api import (
-    get_match_result,
-    get_puuid_by_riot_id,
-    get_player_matches_ids,
-    get_match_timeline,
-    get_puuid_by_summoner_id,
-    get_apex_tiers_summoner_ids,
-    get_account_by_puuid
-)
+from utils.riot_api import *
 
 load_dotenv()
 
@@ -19,7 +11,7 @@ API_KEY = os.getenv("RIOT_API")
 # Example Usage:
 if __name__ == "__main__":
     # Get PUUID by Riot ID (works across Riot Games titles)
-    region = "europe"  # Region for Riot ID API (Europe-wide)
+    region = Region.EUROPE  # Region for Riot ID API (Europe-wide)
     riot_username = "Czarnuszka"  # Replace with the player's Riot ID username
     tag = "JDKZ"  # Replace with the player's tagline
     puuid = get_puuid_by_riot_id(
@@ -45,21 +37,6 @@ if __name__ == "__main__":
     with open("match_timeline.json", "w") as f:
         json.dump(match_timeline, f, indent=4)
 
-    # ===============================================================
-    platform = "euw1"  # League of Legends server, not Riot ID region
-    region = 'europe'
-
-    # all master+ EUW player's summoner_ids
-    apex_tiers_summoner_ids = get_apex_tiers_summoner_ids(API_KEY, platform=platform)
-    with open("apex_tiers_summoner_ids.json", "w") as f:
-        json.dump(apex_tiers_summoner_ids, f, indent=4)
-
-    with open('apex_tiers_summoner_ids.json') as f:
-        data = json.load(f)
-        summoner = data[0]
-        start_time = datetime(year=2024, month=11, day=22)  # request match id's of games finished after given date
-
-        puuid = get_puuid_by_summoner_id(api_key=API_KEY, platform=platform, summoner_id=summoner['summonerId'])
-        print(f"player info: {get_account_by_puuid(api_key=API_KEY, region=region, puuid=puuid)}")
-        match_ids = get_player_matches_ids(api_key=API_KEY, region=region, puuid=puuid, start_time=start_time)
-        print(match_ids)
+    match_data = get_match_data(API_KEY, Region.EUROPE, last)
+    with open(f"match_data.json", 'w') as f:
+        json.dump(match_data, f, indent=4)

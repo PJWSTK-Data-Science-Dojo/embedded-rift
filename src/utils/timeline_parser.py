@@ -174,18 +174,3 @@ def parse_ward_event(frame_dict, event):
 
     return frame_dict
 
-
-def load_timeline(file_name):
-    with open(file_name, 'r') as f:
-        return json.load(f)
-
-
-def save_timeline(timeline, file_name):
-    with open(file_name, 'w') as f:
-        json.dump(timeline, f, indent=4)
-
-
-if __name__ == '__main__':
-    timeline = load_timeline('../match_timeline.json')
-    parsed_timeline = parse_timeline(timeline)
-    save_timeline(parsed_timeline, '../parsed_timeline.json')
