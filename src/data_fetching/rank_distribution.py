@@ -28,7 +28,9 @@ if __name__ == "__main__":
 
     for platform in Platform:
         print(f"Getting {platform}")
-        data = fetch_player_count_in_division_tier_for_platform(platform)
+        data = fetch_player_count_in_division_tier_for_platform(
+            riot_api=riot_api, platform=platform
+        )
         with open(f"data/{platform}_data.json", "w") as f:
             json.dump(data, f, indent=4)
 
