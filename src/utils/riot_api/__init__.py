@@ -196,6 +196,25 @@ class RiotAPI:
                 )
         return summoner_ids
 
+    def get_summoners_page_by_rank(
+        self, platform: Platform, tier: Tier, division: Division, page: int
+    ) -> list[dict]:
+        """
+        :param platform:
+        :param tier: One of ['DIAMOND', 'EMERALD', 'PLATINUM', 'GOLD', 'SILVER', 'BRONZE', 'IRON']
+        :param division: One of ['I', 'II', 'III', 'IV']
+        :param page: Page number to load
+        :return: List of dictionaries
+        """
+        params = {
+            "page": page,
+        }
+
+        url = f"https://{platform.value}.api.riotgames.com/lol/league/v4/entries/{QUEUE}/{tier.value}/{division.value}"
+        data = self.send_request(url, params=params)
+
+        return data
+
     def get_summoner_ids_by_rank(
         self, platform: Platform, tier: Tier, division: Division, count: int = -1
     ) -> list[dict]:
@@ -232,6 +251,41 @@ class RiotAPI:
             )
 
         return summoner_ids
+
+    def get_sumonners_count_by_rank(
+        self, platform: Platform, tier: Tier, division: Division
+    ) -> list[dict]:
+        """
+        :
+                :param platform:
+                :param tier: One of ['DIAMOND', 'EMERALD', 'PLATINUM', 'GOLD', 'SILVER', 'BRONZE', 'IRON']
+                :param division: One of ['I', 'II', 'III', 'IV']
+                :return: List of dictionaries
+        """
+        url = f"https://{platform.value}.api.riotgames.com/lol/league/v4/entries/{QUEUE}/{tier.value}/{division.value}"
+
+        low, high = 1, 1000  # Adjust `high` as needed for your system
+        count = 0
+        while low <= high:
+            mid = (low + high) // 2
+
+            params = {
+                "page": mid,
+            }
+
+            data = self.send_request(url, params=params)
+            count += 1
+
+            if not data:
+                high = mid - 1
+            else:
+                low = mid + 1
+
+        print(
+            f"Tier: {tier.value}, Division: {division.value}, Count: {(high - 1)*205 + len(data)}"
+        )
+        print(f"Total requests made: {count}")
+        return (high - 1) * 205 + len(data)
 
     def get_match_result(self, region: Region, match_id) -> dict:
         url = (
