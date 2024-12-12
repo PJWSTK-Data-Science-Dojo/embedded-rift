@@ -92,6 +92,7 @@ class RiotAPI:
         """
         Sends a GET request to the Riot API while adhering to the rate limit.
 
+        :param headers:
         :param url: The endpoint URL.
         :param params: Optional query parameters for the request.
         :return: The response object from the request.
@@ -155,13 +156,13 @@ class RiotAPI:
     def get_player_matches_ids(
         self,
         region: Region,
-        puuid,
-        queue=QUEUE_ID,
-        game_type=GAME_TYPE,
+        puuid: str,
+        queue: int = QUEUE_ID,
+        game_type: str = GAME_TYPE,
         count: int = None,
         start_time: datetime = None,
         end_time: datetime = None,
-    ):
+    ) -> list[str]:
         url = f"https://{region.value}.api.riotgames.com/lol/match/v5/matches/by-puuid/{puuid}/ids"
         params = {
             "queue": queue,
@@ -220,7 +221,6 @@ class RiotAPI:
     ) -> list[dict]:
         """
 
-        :param self.api_key:
         :param platform:
         :param tier: One of ['DIAMOND', 'EMERALD', 'PLATINUM', 'GOLD', 'SILVER', 'BRONZE', 'IRON']
         :param division: One of ['I', 'II', 'III', 'IV']
@@ -252,11 +252,10 @@ class RiotAPI:
 
         return summoner_ids
 
-    def get_sumonners_count_by_rank(
+    def get_summoners_count_by_rank(
         self, platform: Platform, tier: Tier, division: Division
     ) -> list[dict]:
         """
-        :
                 :param platform:
                 :param tier: One of ['DIAMOND', 'EMERALD', 'PLATINUM', 'GOLD', 'SILVER', 'BRONZE', 'IRON']
                 :param division: One of ['I', 'II', 'III', 'IV']

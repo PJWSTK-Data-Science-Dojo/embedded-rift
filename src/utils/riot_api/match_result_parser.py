@@ -25,18 +25,15 @@ def parse_match_result(match_result_json):
     keys_to_remove = [
         "challenges",
         "missions",
-        "individualPosition",
-        "lane",
-        "role",
-        "teamPosition",
     ]
     for participant in match_result_json["info"]["participants"]:
         for key in keys_to_remove:
             participant.pop(key, None)
         participants.append(participant)
 
-    result["participants"] = participants
     result["teams"] = match_result_json["info"]["teams"]
+    for team_id in range(2):
+        result["teams"][team_id]["participants"] = participants[team_id:team_id + 5]
 
     parsed_result["result"] = result
 

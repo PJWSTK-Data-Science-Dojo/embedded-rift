@@ -22,12 +22,14 @@ def parse_timeline(timeline_json):
         # Initialize frame dict
         frame_dict = {'teams': [{'eventData': init_team_event_data()} for _ in range(2)],
                       'participants': [{'eventData': init_player_event_data()} for _ in range(10)]}
+
         if i > 0:
             # Load event data from previous frame
             for team_id in range(2):
                 frame_dict['teams'][team_id]['eventData'] = parsed_frames[i-1]['teams'][team_id]['eventData'].copy()
             for participant_id in range(10):
                 frame_dict['participants'][participant_id]['eventData'] = parsed_frames[i-1]['participants'][participant_id]['eventData'].copy()
+
         for event in frame['events']:
             # Update current frame dict based on happening events
             if event['type'] == 'CHAMPION_KILL':
@@ -52,6 +54,11 @@ def parse_timeline(timeline_json):
             participantFrame = frame['participantFrames'][str(player_id+1)]
             frame_dict['participants'][player_id] = {**frame_dict['participants'][player_id], **participantFrame}
         parsed_frames.append(frame_dict)
+
+    for i in range(len(parsed_frames)):
+        participants = parsed_frames[i].pop('participants', None)
+        for team_id in range(2):
+            parsed_frames[i]['teams'][team_id]['participants'] = participants[team_id:team_id+5]
 
     return parsed_frames
 
