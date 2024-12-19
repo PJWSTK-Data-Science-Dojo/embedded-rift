@@ -5,7 +5,7 @@ import json
 
 
 async def main():
-    async with GolggScraper(50) as scraper:
+    async with GolggScraper() as scraper:
         tournaments = await scraper.get_tournaments_in_season(10)
 
         # Step 1: Extract matches from tournaments
