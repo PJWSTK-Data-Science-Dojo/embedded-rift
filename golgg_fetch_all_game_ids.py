@@ -37,3 +37,9 @@ async def main():
     print(f"Found {len(games)} games.")
     with open("games.json", "w") as f:
         json.dump(games, f, indent=4)
+
+
+if __name__ == "__main__":
+    import asyncio
+
+    asyncio.run(main())
