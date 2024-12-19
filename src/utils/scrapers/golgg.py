@@ -101,7 +101,6 @@ class GolggScraper:
             try:
                 await page.goto(f"{GOLGG_URL}{s}")
                 await self.click_consent(page)
-                time.sleep(2)
                 navbar = await page.query_selector("#gameMenuToggler")
                 links = await navbar.query_selector_all("a")
                 games = set()
