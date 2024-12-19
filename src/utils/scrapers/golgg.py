@@ -7,6 +7,7 @@ from tqdm import tqdm
 from urllib.parse import urljoin, quote
 import asyncio
 import time
+import parsel
 
 GOLGG_URL = "https://gol.gg"
 GOLGG_TOURNAMENT_API = "https://gol.gg/tournament/ajax.trlist.php"
@@ -17,7 +18,11 @@ class GolggScraper:
         self.semaphore = asyncio.Semaphore(max_pages)
 
     async def start(self, headless: bool = True) -> Self:
-        self.client = httpx.AsyncClient()
+        self.client = httpx.AsyncClient(
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)",
+            }
+        )
         self.playwright = await async_playwright().start()
         self.browser = await self.playwright.chromium.launch(headless=headless)
         return self
@@ -41,14 +46,12 @@ class GolggScraper:
             await buttons[1].click()
 
     async def get_tournaments_in_season(self, season: int = 9) -> list[dict]:
-        url = GOLGG_TOURNAMENT_API
-        async with httpx.AsyncClient() as client:
-            response = await self.client.post(
-                "https://gol.gg/tournament/ajax.trlist.php",
-                data={"season": f"S{season}"},
-            )
-            data = response.json()
-            return data
+        response = await self.client.post(
+            GOLGG_TOURNAMENT_API,
+            data={"season": f"S{season}"},
+        )
+        data = response.json()
+        return data
 
     async def get_all_tournaments(self) -> list[dict]:
         result = []
@@ -62,68 +65,77 @@ class GolggScraper:
         matches = set()
         encoded_trname = quote(tournament_name)
         s = f"tournament-matchlist/{encoded_trname}/"
-        async with self.semaphore:
-            page = await self.browser.new_page()
-            try:
-                url = f"{GOLGG_URL}/tournament/{s}"
-                await page.goto(url)
-                await self.click_consent(page)
-                table = await page.query_selector(".table_list")
-                tbody = await table.query_selector("tbody")
-                rows = await tbody.query_selector_all("tr")
-                for row in rows:
-                    link = await row.query_selector("a")
-                    href = await link.get_attribute("href")
-                    if not href:
-                        continue
 
-                    pattern = r"stats/(\d+)/"
-                    match: re.Match = re.search(pattern, href)
+        url = f"{GOLGG_URL}/tournament/{s}"
 
-                    if not match:
-                        print("Couldnt extract match id from", href)
-                        continue
+        response = await self.client.get(url)
+        html = response.content.decode("utf-8")
 
-                    match_id = match.group(1)
-                    matches.add(match_id)
+        sel = parsel.Selector(text=html)
+        rows = sel.css(".table_list tbody tr")
 
-            finally:
-                await page.close()
+        # Extract links and match IDs
+        matches = set()
+        for row in rows:
+            href = row.css("a::attr(href)").get()
+
+            if not href:
+                continue
+
+            # Extract match ID using regex
+            pattern = r"stats/(\d+)/"
+            match = re.search(pattern, href)
+            if not match:
+                print("Couldn't extract match id from", href)
+                continue
+
+            match_id = match.group(1)
+            matches.add(match_id)
 
         return matches
 
     async def get_games_ids_in_match(self, match_id):
         """Get the games ids in a match."""
         s = f"/game/stats/{match_id}/page-summary/"
-
+        url = f"{GOLGG_URL}{s}"
         async with self.semaphore:
-            page = await self.browser.new_page()
-            try:
-                await page.goto(f"{GOLGG_URL}{s}")
-                await self.click_consent(page)
-                navbar = await page.query_selector("#gameMenuToggler")
-                links = await navbar.query_selector_all("a")
-                games = set()
+            response = await self.client.get(url)
 
-                for link in links:
-                    if (await link.text_content()).startswith("GAME"):
-                        continue
+        if response.status_code != 200:
+            print("Couldn't fetch", url)
+            return set()
 
-                    href = await link.get_attribute("href")
-                    if not href:
-                        print("Couldnt extract href from", link.inner_html())
-                        continue
+        html = response.content.decode("utf-8")
+        with open("test.html", "w") as f:
+            f.write(html)
+        sel = parsel.Selector(text=html)
+        navbar = sel.css("#gameMenuToggler")
+        if not navbar:
+            print("Couldn't find navbar in", url)
+            return set()
 
-                    pattern = r"stats/(\d+)/"
-                    match: re.Match = re.search(pattern, href)
+        links = navbar[0].css("a")
+        # Extract game IDs
+        games = set()
+        for link in links:
+            text = link.css("::text").get()
+            if text and text.startswith("GAME"):
+                continue
 
-                    if not match:
-                        print("Couldnt extract game id from", href)
-                        continue
+            href = link.css("::attr(href)").get()
+            if not href:
+                print("Couldn't extract href from", link.get())
+                continue
 
-                    game_id = match.group(1)
-                    games.add(game_id)
-            finally:
-                await page.close()
+            # Extract game ID using regex
+            pattern = r"stats/(\d+)/"
+            match = re.search(pattern, href)
+
+            if not match:
+                print("Couldn't extract game id from", href)
+                continue
+
+            game_id = match.group(1)
+            games.add(game_id)
 
         return games
