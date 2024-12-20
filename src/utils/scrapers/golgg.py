@@ -139,3 +139,38 @@ class GolggScraper:
             games.add(game_id)
 
         return games
+
+    async def get_game_data(self, game_id: str):
+        summary = "page-game"
+        all_stats = "page-fullstats"
+        builds = "page-builds"
+        timeline = "page-timeline"
+        response = await self.client.get(f"{GOLGG_URL}/game/stats/{game_id}/{summary}/")
+        html = response.content.decode("utf-8")
+
+        sel = parsel.Selector(text=html)
+        time_text = sel.xpath(
+            '//div[starts-with(text(), "Game Time")]//h1/text()'
+        ).get()
+        minutes, seconds = time_text.split(":")
+        time_in_seconds = int(minutes) * 60 + int(seconds)
+
+        patch = sel.css("div.col-3.text-right::text").get().strip()
+        game_data = {
+            "metadata": {
+                "game_id": game_id,
+                patch: patch,
+            },
+            "results": {
+                "time": time_in_seconds,
+            },
+            "teams": {
+                "blue": {
+                    "players": [],
+                },
+                "red": {
+                    "players": [],
+                },
+            },
+        }
+        return game_data
