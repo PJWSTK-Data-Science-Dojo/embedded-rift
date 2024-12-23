@@ -4,7 +4,7 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import Select
 import time
-
+import csv
 
 service = Service("C:\\Windows\\System32\\chromedriver.exe")
 driver = webdriver.Chrome(service=service)
@@ -17,6 +17,7 @@ with open('Data\\table_data.txt', 'r', encoding='utf-8') as file:
 
 urls = [url + lines.split(" - ")[1].strip() for lines in lines]
 champions_stats = []
+
 for url in urls:
     driver.get(url)
     time.sleep(8)
@@ -43,9 +44,7 @@ for url in urls:
         except Exception:
             continue
 
-import csv
-
-with open("champions_stats_raw.csv", "w", newline="", encoding="utf-8") as csvfile:
+with open("Data\\champions_stats_raw.csv", "w", newline="", encoding="utf-8") as csvfile:
     writer = csv.writer(csvfile)
     writer.writerow(["Champion", "Option", "Stats"])
     for champion in champions_stats:
