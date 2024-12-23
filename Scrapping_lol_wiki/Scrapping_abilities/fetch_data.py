@@ -5,11 +5,11 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import Select
 import time
 
-# Konfiguracja przeglądarki
-service = Service("C:\\Windows\\System32\\chromedriver.exe")  # Ścieżka do ChromeDriver
+
+service = Service("C:\\Windows\\System32\\chromedriver.exe")
 driver = webdriver.Chrome(service=service)
 
-# Otwórz stronę z informacjami o postaciach
+
 url = "https://wiki.leagueoflegends.com"
 
 with open('C:\\Users\\Michał\\PycharmProjects\\Embedded\\Part1\\modified_table_data.txt', 'r', encoding='utf-8') as file:
