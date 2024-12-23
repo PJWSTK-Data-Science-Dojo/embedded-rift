@@ -12,7 +12,7 @@ driver = webdriver.Chrome(service=service)
 
 url = "https://wiki.leagueoflegends.com"
 
-with open('C:\\Users\\Michał\\PycharmProjects\\Embedded\\Part1\\modified_table_data.txt', 'r', encoding='utf-8') as file:
+with open('Data\\table_data.txt', 'r', encoding='utf-8') as file:
     lines = file.readlines()
 
 urls = [url + lines.split(" - ")[1].strip() for lines in lines]
