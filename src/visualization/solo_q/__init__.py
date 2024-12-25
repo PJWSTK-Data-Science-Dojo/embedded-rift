@@ -33,7 +33,7 @@ def plot_histogram(
     plt.figure(figsize=(12, 6))
     plt.bar(data.keys(), data.values(), color=colors)
 
-    plt.title("Histogram")
+    plt.title(title)
     plt.xlabel("Rank")
     plt.ylabel("Reverse Cumulative Percentage (%)")
 

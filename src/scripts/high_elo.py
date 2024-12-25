@@ -1,11 +1,9 @@
 from dotenv import load_dotenv
 import os
 import json
-from ..utils.riot_api import RiotAPI, Division, Platform, Tier
+from utils.riot_api import RiotAPI, Division, Platform, Tier
 
-load_dotenv()
 
-API_KEY = os.getenv("RIOT_API")
 
 
 def get_high_elo_summoner_ids(riot_api: RiotAPI, platform: Platform):
@@ -26,8 +24,12 @@ def get_high_elo_summoner_ids(riot_api: RiotAPI, platform: Platform):
 
 
 if __name__ == "__main__":
+    load_dotenv()
+
+    API_KEY = os.getenv("RIOT_API")
+    
     riot_api = RiotAPI(API_KEY)
     summoner_ids = get_high_elo_summoner_ids(platform=Platform.EUW)
 
-    with open("diamond+_summoner_ids.json", "w") as f:
+    with open("data/dplus_summoner_ids.json", "w") as f:
         json.dump(summoner_ids, f, indent=4)
