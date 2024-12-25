@@ -2,8 +2,8 @@ import requests
 from datetime import datetime
 from enum import StrEnum
 import time
-from .match_result_parser import parse_match_result
-from .timeline_parser import parse_timeline
+from .match_parser.result import parse_match_result
+from .match_parser.timeline import parse_timeline
 
 QUEUE_ID = 420  # id of soloQ queue type (queue id's at https://static.developer.riotgames.com/docs/lol/queues.json)
 QUEUE = "RANKED_SOLO_5x5"  # soloQ
@@ -256,10 +256,10 @@ class RiotAPI:
         self, platform: Platform, tier: Tier, division: Division
     ) -> list[dict]:
         """
-                :param platform:
-                :param tier: One of ['DIAMOND', 'EMERALD', 'PLATINUM', 'GOLD', 'SILVER', 'BRONZE', 'IRON']
-                :param division: One of ['I', 'II', 'III', 'IV']
-                :return: List of dictionaries
+        :param platform:
+        :param tier: One of ['DIAMOND', 'EMERALD', 'PLATINUM', 'GOLD', 'SILVER', 'BRONZE', 'IRON']
+        :param division: One of ['I', 'II', 'III', 'IV']
+        :return: List of dictionaries
         """
         url = f"https://{platform.value}.api.riotgames.com/lol/league/v4/entries/{QUEUE}/{tier.value}/{division.value}"
 
