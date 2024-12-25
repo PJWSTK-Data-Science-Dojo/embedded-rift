@@ -1,7 +1,7 @@
 from dotenv import load_dotenv
 import os
 import json
-from . import RiotAPI, Division, Platform, Tier
+from ..utils.riot_api import RiotAPI, Division, Platform, Tier
 
 load_dotenv()
 

@@ -4,9 +4,6 @@ import json
 from dotenv import load_dotenv
 import os
 
-load_dotenv()
-API_KEY = os.getenv("RIOT_API")
-
 
 def fetch_player_count_in_division_tier_for_platform(
     riot_api: RiotAPI, platform: Platform
@@ -24,6 +21,9 @@ def fetch_player_count_in_division_tier_for_platform(
 
 
 if __name__ == "__main__":
+    load_dotenv()
+    API_KEY = os.getenv("RIOT_API")
+
     riot_api = RiotAPI(API_KEY)
 
     for platform in Platform:

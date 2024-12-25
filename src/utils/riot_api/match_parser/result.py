@@ -32,8 +32,11 @@ def parse_match_result(match_result_json):
         participants.append(participant)
 
     result["teams"] = match_result_json["info"]["teams"]
-    for team_id in range(2):
-        result["teams"][team_id]["participants"] = participants[team_id:team_id + 5]
+
+    result["teams"][0]["participants"], result["teams"][1]["participants"] = (
+        participants[:5],
+        participants[5:],
+    )
 
     parsed_result["result"] = result
 
