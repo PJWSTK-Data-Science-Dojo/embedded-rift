@@ -1,34 +1,33 @@
-from . import data_dragon as dd
-from . import wiki
+from . import data_dragon
+from .wiki import WikiScraper
 from . import _utils
 import json
 
 
 class LoLScraper:
-    @staticmethod
-    def get_all_champions() -> list[str]:
-        return dd.all_champions()
+    def __init__(self):
+        self.ddragon = data_dragon.DataDragonAPI()
+        self.wiki = WikiScraper()
 
-    @staticmethod
-    def get_champion_abilities(champion: str) -> list[str]:
-        return wiki.get_champion_abilities(champion)
+    def get_all_champions(self) -> list[str]:
+        return self.ddragon.all_champions()
 
-    @staticmethod
-    def get_ability_data(champion: str, ability: str) -> str:
-        return wiki.get_ability_data(champion, ability)
+    def get_champion_abilities(self, champion: str) -> list[str]:
+        return self.wiki.get_champion_ability_names(champion)
 
-    @staticmethod
-    def get_champion_data(champion: str) -> _utils.Champion:
-        print(champion)
-        champion_data = dd.get_champion_data(champion)
+    def get_ability_data(self, champion: str, ability: str) -> str:
+        return self.wiki.get_ability_data(champion, ability)
+
+    def get_champion_data(self, champion: str) -> _utils.Champion:
+        champion_data = self.ddragon.get_champion_data(champion)
         champion_name = champion_data["name"]
 
         del champion_data["spells"]
 
-        abi = wiki.get_champion_abilities(champion_name)
+        abi = self.wiki.get_champion_ability_names(champion_name)
         abilities = {
             ability: _utils.ChampionAbility.from_dict(
-                wiki.get_ability_data(champion_name, ability)
+                self.wiki.get_ability_data(champion_name, ability)
             )
             for ability in abi
         }
@@ -38,16 +37,15 @@ class LoLScraper:
             name=champion_name,
             stats=_utils.ChampionStats.from_dict(champion_data["stats"]),
             abilities=abilities,
-            resource=dd.partype_to_resource(champion_data["partype"]),
-            patch=dd.PATCH,
+            resource=self.ddragon.partype_to_resource(champion_data["partype"]),
+            patch=data_dragon.PATCH,
         )
 
-    @staticmethod
-    def get_all_champions_data() -> dict[str, _utils.Champion]:
-        data = dd.get_all_champions_data()
+    def get_all_champions_data(self) -> dict[str, _utils.Champion]:
+        data = self.ddragon.get_all_champions_data()
         result = {}
         for champion in data["data"]:
-            champion_data = LoLScraper.get_champion_data(champion)
+            champion_data: _utils.Champion = self.get_champion_data(champion)
             result[champion_data.name] = champion_data
 
         return result
