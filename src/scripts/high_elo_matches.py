@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 import os
 from utils.riot_api import RiotAPI, Platform, Region
 
+
 def save_point_generator(save_points):
     """
     Generator that yields the next save point based on the current progress.
@@ -15,7 +16,13 @@ def save_point_generator(save_points):
     for point in save_points:
         yield point
 
-def get_high_elo_matches(api: RiotAPI, platform: Platform, region: Region, save_points=[1000, 5000, 10000, 15000]):
+
+def get_high_elo_matches(
+    api: RiotAPI,
+    platform: Platform,
+    region: Region,
+    save_points=[1000, 5000, 10000, 15000],
+):
     """
     Fetches up to max_count Challenger games using the RiotAPI class and saves progress to JSON files.
 
@@ -42,7 +49,7 @@ def get_high_elo_matches(api: RiotAPI, platform: Platform, region: Region, save_
 
     match_ids = set()
     start_time = datetime.now() - timedelta(days=7)
-    
+
     save_point_gen = save_point_generator(save_points)
     next_save_point = next(save_point_gen, None)
 
@@ -57,7 +64,9 @@ def get_high_elo_matches(api: RiotAPI, platform: Platform, region: Region, save_
             continue
 
         print(f"Fetching matches for PUUID: {puuid}")
-        matches = api.get_player_matches_ids(region, puuid, start_time=start_time, count=10)
+        matches = api.get_player_matches_ids(
+            region, puuid, start_time=start_time, count=10
+        )
 
         if matches:
             match_ids.update(matches)
@@ -83,7 +92,12 @@ def get_high_elo_matches(api: RiotAPI, platform: Platform, region: Region, save_
     print(f"Saved final {len(match_ids)} matches to {file_name}.")
 
 
-def fetch_and_save_match_data(api: RiotAPI, region: Region, match_ids: list, save_points=[1000, 5000, 10000, 15000]):
+def fetch_and_save_match_data(
+    api: RiotAPI,
+    region: Region,
+    match_ids: list,
+    save_points=[1000, 5000, 10000, 15000],
+):
     """
     Fetch detailed match data for a list of match IDs and save progress to JSON files in line-delimited format.
 
@@ -113,30 +127,31 @@ def fetch_and_save_match_data(api: RiotAPI, region: Region, match_ids: list, sav
                 for match in match_data:
                     if match:
                         f.write(json.dumps(match) + "\n")
+
             print(f"Saved {processed_count} matches to {file_name}.")
-            match_data = []  # Clear data after saving
             next_save_point = next(save_point_gen, None)
 
         # Stop if max_count is reached
         if next_save_point is None:
             break
 
-    # Final save if not already saved
-    if match_data:
-        file_name = f"data/high_elo_match_data_final_{processed_count}.jsonl"
-        with open(file_name, "w") as f:
-            for match in match_data:
-                if match:
-                    f.write(json.dumps(match) + "\n")
-        print(f"Saved final {processed_count} matches to {file_name}.")
-
     print(f"Finished processing {processed_count} matches.")
+    # Final save if not already saved
+    if not match_data:
+        return
+
+    file_name = f"data/high_elo_match_data_final_{processed_count}.jsonl"
+    with open(file_name, "w") as f:
+        for match in match_data:
+            if match:
+                f.write(json.dumps(match) + "\n")
+    print(f"Saved final {processed_count} matches to {file_name}.")
 
 
 if __name__ == "__main__":
     load_dotenv()
     API_KEY = os.getenv("RIOT_API")
-    
+
     riot_api = RiotAPI(api_key=API_KEY)
     # save_points = [10, 50, 100]
     save_points = [10, 50, 100, 500, 1000, 2500, 5000, 10000, 20000]
@@ -144,7 +159,9 @@ if __name__ == "__main__":
     PLATFORM = Platform.EUW  # Change to your preferred platform
     REGION = Region.EUROPE  # Corresponding region for the platform
 
-    random_matches = get_high_elo_matches(riot_api, PLATFORM, REGION, save_points=save_points)
+    random_matches = get_high_elo_matches(
+        riot_api, PLATFORM, REGION, save_points=save_points
+    )
     fetch_and_save_match_data(riot_api, REGION, random_matches, save_points=save_points)
 
     # Example: Save or process the data
