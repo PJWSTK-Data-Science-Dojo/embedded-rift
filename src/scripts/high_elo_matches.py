@@ -90,6 +90,7 @@ def get_high_elo_matches(
     with open(file_name, "w") as f:
         json.dump(list(match_ids), f, indent=4)
     print(f"Saved final {len(match_ids)} matches to {file_name}.")
+    return list(match_ids)
 
 
 def fetch_and_save_match_data(
