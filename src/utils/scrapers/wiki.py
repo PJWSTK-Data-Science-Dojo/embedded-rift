@@ -57,13 +57,13 @@ class WikiScraper(APIHandler):
 
     def _extract_ability_data(self, selector: parsel.Selector) -> dict:
         rows = selector.css("table.article-table.grid > tbody > tr")
-        skill_data = {}
+        skill_data = {"description": "", "leveling": ""}
         tooltips = {"abilities": {}, "champions": {}, "items": {}, "data": {}}
 
         for row in rows[1:]:
             key_cell, value_cell, *_ = row.css(":scope > td")
             key = key_cell.css("code::text").get().strip()
-
+            key = key.replace(" ", "_").lower()
             if key in MEDIA_KEYS or key in IGNORED_KEYS:
                 continue
 
@@ -189,7 +189,6 @@ class WikiScraper(APIHandler):
             .replace(" ", "_")
             .replace("'", "%27")
         )
-
         resp = self.send_request(url)
         if resp.status_code != 200:
             print(f"Failed to fetch skill page {url}")

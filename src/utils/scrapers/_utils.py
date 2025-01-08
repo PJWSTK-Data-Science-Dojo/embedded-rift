@@ -20,11 +20,12 @@ class Tooltips:
 @dataclass(slots=True, frozen=True)
 class ChampionAbility:
     description: str
+    leveling: str
     notes: Optional[str] = None
     blurb: Optional[str] = None
     tooltips: Tooltips = None
     cost: Optional[str] = None
-    cost_type: Optional[str] = None
+    costtype: Optional[str] = None
     targeting: Optional[str] = None
     cooldown: Optional[str] = None
     skill: Optional[str] = None
@@ -40,12 +41,12 @@ class ChampionAbility:
     speed: Optional[str] = None
     cast_time: Optional[str] = None
     static: Optional[str] = None
-    on_target_cd: Optional[str] = None
+    ontargetcd: Optional[str] = None
     recharge: Optional[str] = None
     affects: Optional[str] = None
-    damage_type: Optional[str] = None
-    spell_effects: Optional[str] = None
-    spell_shield: Optional[str] = None
+    damagetype: Optional[str] = None
+    spelleffects: Optional[str] = None
+    spellshield: Optional[str] = None
     projectile: Optional[str] = None
     grounded: Optional[str] = None
     knockdown: Optional[str] = None
