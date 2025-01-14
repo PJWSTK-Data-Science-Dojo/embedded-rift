@@ -9,8 +9,19 @@ class LoLScraper:
         self.ddragon = data_dragon.DataDragonAPI()
         self.wiki = WikiScraper()
 
-    def get_all_champions(self) -> list[str]:
-        return self.ddragon.all_champions()
+    def get_champions_names(self, patch: str = data_dragon.PATCH) -> list[str]:
+        return self.ddragon.champions.all_champions_names(patch)
+
+    def get_champion_data(
+        self, champion_name: str, patch: str = data_dragon.PATCH
+    ) -> dict:
+        return self.ddragon.champions.get_champion_data(champion_name, patch)
+
+    def get_items(self, patch: str = data_dragon.PATCH) -> dict:
+        return self.ddragon.items.get_all_items(patch)
+
+    def get_item_data(self, item_id: int | str, patch: str = data_dragon.PATCH) -> dict:
+        return self.ddragon.items.get_item_data(item_id, patch)
 
     def get_champion_abilities(self, champion: str) -> list[str]:
         return self.wiki.get_champion_ability_names(champion)
@@ -19,7 +30,7 @@ class LoLScraper:
         return self.wiki.get_ability_data(champion, ability)
 
     def get_champion_data(self, champion: str) -> _utils.Champion:
-        champion_data = self.ddragon.get_champion_data(champion)
+        champion_data = self.ddragon.champions.get_champion_data(champion)
         champion_name = champion_data["name"]
 
         del champion_data["spells"]
@@ -42,7 +53,7 @@ class LoLScraper:
         )
 
     def get_all_champions_data(self) -> dict[str, _utils.Champion]:
-        data = self.ddragon.get_all_champions_data()
+        data = self.ddragon.champions.get_all_champions_data()
         result = {}
         for champion in data["data"]:
             champion_data: _utils.Champion = self.get_champion_data(champion)
