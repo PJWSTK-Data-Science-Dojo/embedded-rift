@@ -116,7 +116,7 @@ def fetch_and_save_match_data(
 
     for match_id in match_ids:
         print(f"Fetching data for match ID: {match_id}")
-        match_data.append(api.get_match_result(region, match_id))
+        match_data.append(api.get_match_data(region, match_id))
         processed_count += 1
 
         print(f"Processed {processed_count} matches so far.")
