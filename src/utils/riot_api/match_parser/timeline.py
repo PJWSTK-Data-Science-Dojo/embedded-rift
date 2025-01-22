@@ -110,7 +110,7 @@ def parse_champion_kill_event(frame_dict: dict, event: dict) -> dict:
 
 def parse_item_event(frame_dict, event):
     player_id = event['participantId'] - 1
-    items = frame_dict['participants'][player_id]['eventData']['items']
+    items: list = frame_dict['participants'][player_id]['eventData']['items']
 
     if event['type'] == 'ITEM_PURCHASED':
         if event['itemId'] not in IGNORED:
@@ -126,8 +126,12 @@ def parse_item_event(frame_dict, event):
 
     elif event['type'] == 'ITEM_UNDO':
         if event['afterId'] not in IGNORED and event['beforeId'] not in IGNORED:
-            index = items.index(event['beforeId'])
-            items[index] = event['afterId']
+            # TODO: Check if this is correct
+            try:
+                index = items.index(event['beforeId'])
+                items[index] = event['afterId']
+            except ValueError:
+                pass
 
     return frame_dict
 
