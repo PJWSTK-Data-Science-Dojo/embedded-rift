@@ -113,7 +113,7 @@ def parse_item_event(frame_dict, event):
     items: list = frame_dict['participants'][player_id]['eventData']['items']
 
     if event['type'] == 'ITEM_PURCHASED':
-        if event['itemId'] not in IGNORED:
+        if event['itemId'] not in IGNORED and 0 in items: # TODO: Check if 0 is correct
             index = items.index(0)
             items[index] = event['itemId']
 
