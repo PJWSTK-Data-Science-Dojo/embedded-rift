@@ -4,8 +4,8 @@ IGNORED = {2003, 2031, 2055,  # Health Potion, Refillable Potion, Control Ward
            2138, 2139, 2140,  # Elixir of Iron, Elixir of Sorcery, Elixir of Wrath
            3340, 3363, 3364}  # Stealth Ward, Farsight Alteration, Oracle Lens
 
-ELITE_MONSTERS = ['HORDE', 'RIFTHERALD', 'BARON_NASHOR', 'DRAGON']  # monster types used by RiotAPI
-ELITE_MONSTERS_LABELS = ['voidGrub', 'riftHerald', 'baronNashor', 'drake', 'elderDrake']
+ELITE_MONSTERS = ['HORDE', 'RIFTHERALD', 'BARON_NASHOR', 'ATAKHAN', 'DRAGON']  # monster types used by RiotAPI
+ELITE_MONSTERS_LABELS = ['voidGrub', 'riftHerald', 'baronNashor', 'atakhan', 'drake', 'elderDrake']
 
 SOULS = ['None', 'Infernal', 'Ocean', 'Cloud', 'Mountain', 'Hextech', 'Chemtech']  # possible dragon souls, same names used by RiotAPI
 
@@ -66,6 +66,7 @@ def parse_timeline(timeline_json: dict) -> dict:
             parsed_frames[i]['teams'][team_id]['participants'] = participants[team_id:team_id+5]
 
     return parsed_frames
+
 
 def init_team_event_data() -> dict[str, int | dict[str, int]]:
     event_data = {
@@ -192,7 +193,6 @@ def parse_ward_event(frame_dict: dict, event: dict) -> dict:
         player_id = event['creatorId'] - 1
         frame_dict['participants'][player_id]['eventData']['wardsPlaced'] += 1
         return frame_dict
-    
 
     if event['type'] == 'WARD_KILL':
         player_id = event['killerId'] - 1
