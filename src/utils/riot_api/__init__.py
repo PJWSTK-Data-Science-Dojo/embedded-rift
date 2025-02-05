@@ -73,7 +73,7 @@ class RiotAPI(APIHandler):
             headers = {}
 
         headers = {**headers, "X-Riot-Token": self.api_key}
-        super().get_json(url, headers=headers, params=params)
+        return super().get_json(url, headers=headers, params=params)
 
     def get_puuid_by_riot_id(
         self, region: Region, game_name: str, tag: str
