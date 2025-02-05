@@ -2,6 +2,8 @@ import requests
 from datetime import datetime
 from enum import StrEnum
 import time
+
+from utils.api_handler import APIHandler
 from .match_parser.result import parse_match_result
 from .match_parser.timeline import parse_timeline
 
@@ -53,83 +55,31 @@ class Division(StrEnum):
     I = "I"
 
 
-class RiotAPI:
+class RiotAPI(APIHandler):
     def __init__(self, api_key, rate_limit=100, rate_window=120):
         """
         :param self.api_key: Your Riot API key.
         :param rate_limit: Number of requests allowed in the rate window.
         :param rate_window: Time window in seconds for the rate limit.
         """
+        super().__init__(rate_limit=rate_limit, rate_window=120)
         self.api_key = api_key
         self.rate_limit = rate_limit
         self.rate_window = rate_window
         self.request_times = []  # Tracks timestamps of API requests
 
-    def _rate_limit_check(self):
-        """
-        Ensures the API requests stay within the specified rate limit.
-        If the limit is exceeded, it pauses execution until a request can be made.
-        """
-        current_time = time.time()
-
-        # Clean up old timestamps
-        self.request_times = [
-            t for t in self.request_times if current_time - t < self.rate_window
-        ]
-
-        if len(self.request_times) >= self.rate_limit:
-            wait_time = self.rate_window - (current_time - self.request_times[0])
-            # print(f"Rate limit reached. Waiting for {wait_time:.2f} seconds...")
-            time.sleep(wait_time)
-
-            self.request_times = [
-                t for t in self.request_times if time.time() - t < self.rate_window
-            ]
-
-    def send_request(
-        self, url: str, *, headers: dict = None, params: dict = None
-    ) -> dict:
-        """
-        Sends a GET request to the Riot API while adhering to the rate limit.
-
-        :param headers:
-        :param url: The endpoint URL.
-        :param params: Optional query parameters for the request.
-        :return: The response object from the request.
-        """
+    def get_json(self, url, *, headers=None, params=None):
         if headers is None:
             headers = {}
 
-        self._rate_limit_check()  # Check and enforce rate limit
-
         headers = {**headers, "X-Riot-Token": self.api_key}
-        response = requests.get(url, headers=headers, params=params)
-
-        if response.status_code != 429:
-            self.request_times.append(time.time())
-            return response.json()
-
-        print(f"RateLimit Error: {response.status_code}, {response.text}")
-        print(f"Waiting for {self.rate_window} seconds...")
-
-        time.sleep(self.rate_window)
-
-        response = requests.get(url, headers=headers, params=params)
-
-        if response.status_code == 429:
-            # TODO: Should we raise an exception here?
-            raise Exception(
-                f"Rate limit exceeded even after delay 121 seconds. {response.status_code}, {response.text}"
-            )
-
-        self.request_times.append(time.time())
-        return response.json()
+        super().get_json(url, headers=headers, params=params)
 
     def get_puuid_by_riot_id(
         self, region: Region, game_name: str, tag: str
     ) -> str | None:
         url = f"https://{region.value}.api.riotgames.com/riot/account/v1/accounts/by-riot-id/{game_name}/{tag}"
-        data = self.send_request(url)
+        data = self.get_json(url)
         if not data:
             return None
 
@@ -140,7 +90,7 @@ class RiotAPI:
     ) -> str | None:
         url = f"https://{platform.value}.api.riotgames.com/lol/summoner/v4/summoners/{summoner_id}"
 
-        data = self.send_request(url)
+        data = self.get_json(url)
 
         if not data:
             return None
@@ -150,7 +100,7 @@ class RiotAPI:
     def get_account_by_puuid(self, region: Region, puuid: str) -> dict:
         url = f"https://{region.value}.api.riotgames.com/riot/account/v1/accounts/by-puuid/{puuid}"
 
-        data = self.send_request(url)
+        data = self.get_json(url)
         return data
 
     def get_player_matches_ids(
@@ -178,7 +128,7 @@ class RiotAPI:
         if end_time:
             params["endTime"] = round(end_time.timestamp())
 
-        data = self.send_request(url, params=params)
+        data = self.get_json(url, params=params)
         return data
 
     def get_apex_tiers_summoner_ids(self, platform: Platform) -> list[dict]:
@@ -187,7 +137,7 @@ class RiotAPI:
         summoner_ids = []
         for league in apex_leagues:
             url = f"https://{platform.value}.api.riotgames.com/lol/league/v4/{league}/by-queue/{QUEUE}"
-            data = self.send_request(url)
+            data = self.get_json(url)
             if data:
                 summoner_ids.extend(
                     [
@@ -212,7 +162,7 @@ class RiotAPI:
         }
 
         url = f"https://{platform.value}.api.riotgames.com/lol/league/v4/entries/{QUEUE}/{tier.value}/{division.value}"
-        data = self.send_request(url, params=params)
+        data = self.get_json(url, params=params)
 
         return data
 
@@ -241,7 +191,7 @@ class RiotAPI:
             page += 1
 
             url = f"https://{platform.value}.api.riotgames.com/lol/league/v4/entries/{QUEUE}/{tier.value}/{division.value}"
-            data = self.send_request(url, params=params)
+            data = self.get_json(url, params=params)
 
             if not data:
                 break
@@ -272,7 +222,7 @@ class RiotAPI:
                 "page": mid,
             }
 
-            data = self.send_request(url, params=params)
+            data = self.get_json(url, params=params)
             count += 1
 
             if not data:
@@ -291,13 +241,13 @@ class RiotAPI:
             f"https://{region.value}.api.riotgames.com/lol/match/v5/matches/{match_id}"
         )
 
-        data = self.send_request(url)
+        data = self.get_json(url)
         return data
 
     def get_match_timeline(self, region: Region, match_id: str) -> dict:
         url = f"https://{region.value}.api.riotgames.com/lol/match/v5/matches/{match_id}/timeline"
 
-        data = self.send_request(url)
+        data = self.get_json(url)
         return data
 
     def get_match_data(self, region: Region, match_id: str) -> dict:
