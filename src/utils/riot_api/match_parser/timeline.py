@@ -20,9 +20,10 @@ def parse_timeline(timeline_json: dict) -> dict:
     for i, frame in enumerate(frames):
         # Initialize frame dict
         frame_dict = {
-            'teams': [
-                {'eventData': init_team_event_data()} for _ in range(2)
-            ],
+            'teams': {
+                'blue': {'eventData': init_team_event_data(), 'teamId': Team.BLUE.value},
+                'red': {'eventData': init_team_event_data(), 'teamId': Team.RED.value}
+            },
             'participants': [
                 {'eventData': init_player_event_data()} for _ in range(10)
             ]
@@ -30,10 +31,10 @@ def parse_timeline(timeline_json: dict) -> dict:
 
         if i > 0:
             # Load event data from previous frame
-            for team_id in range(2):
-                frame_dict['teams'][team_id]['eventData'] = parsed_frames[i-1]['teams'][team_id]['eventData'].copy()
+            for team in ['blue', 'red']:
+                frame_dict['teams'][team]['eventData'] = parsed_frames[i - 1]['teams'][team]['eventData'].copy()
             for participant_id in range(10):
-                frame_dict['participants'][participant_id]['eventData'] = parsed_frames[i-1]['participants'][participant_id]['eventData'].copy()
+                frame_dict['participants'][participant_id]['eventData'] = parsed_frames[i - 1]['participants'][participant_id]['eventData'].copy()
 
         for event in frame['events']:
             # Update current frame dict based on happening events
@@ -56,14 +57,14 @@ def parse_timeline(timeline_json: dict) -> dict:
 
         # Include non-event data like championStats, damageStats ...
         for player_id in range(10):
-            participantFrame = frame['participantFrames'][str(player_id+1)]
+            participantFrame = frame['participantFrames'][str(player_id + 1)]
             frame_dict['participants'][player_id] = {**frame_dict['participants'][player_id], **participantFrame}
         parsed_frames.append(frame_dict)
 
     for i in range(len(parsed_frames)):
         participants = parsed_frames[i].pop('participants', None)
-        for team_id in range(2):
-            parsed_frames[i]['teams'][team_id]['participants'] = participants[team_id:team_id+5]
+        for j, team in enumerate(['blue', 'red']):
+            parsed_frames[i]['teams'][team]['participants'] = participants[j*5:j*5 + 5]
 
     return parsed_frames
 
@@ -147,33 +148,33 @@ def parse_skill_level_up_event(frame_dict, event):
 
 
 def parse_elite_monster_kill_event(frame_dict: dict, event: dict) -> dict:
-    team_id = 0 if event['killerTeamId'] == Team.BLUE else 1 # team_id - id of the team that killed the monster
-    
+    team = 'blue' if event['killerTeamId'] == Team.BLUE.value else 'red'  # team - name of the team that killed the monster
+
     monster_id = ELITE_MONSTERS.index(event['monsterType'])
-    
+
     if event['monsterType'] == 'DRAGON' and event['monsterSubType'] == 'ELDER_DRAGON':
         monster_id = ELITE_MONSTERS_LABELS.index('elderDrake')
 
-    elite_monsters_killed = frame_dict['teams'][team_id]['eventData']['eliteMonstersKilled']
+    elite_monsters_killed = frame_dict['teams'][team]['eventData']['eliteMonstersKilled']
     elite_monsters_killed[ELITE_MONSTERS_LABELS[monster_id]] += 1
 
     return frame_dict
 
 
 def parse_dragon_soul_given_event(frame_dict: dict, event: dict) -> dict:
-    team_id = 0 if event['teamId'] == Team.BLUE else 1  # team_id - id of the team that gets the soul
-    frame_dict['teams'][team_id]['eventData']['dragonSoul'] = SOULS.index(event['name'])
+    team = 'blue' if event['teamId'] == Team.BLUE.value else 'red'  # team - name of the team that gets the soul
+    frame_dict['teams'][team]['eventData']['dragonSoul'] = SOULS.index(event['name'])
 
     return frame_dict
 
 
 def parse_building_kill_event(frame_dict: dict, event: dict) -> dict:
     # teamId: (id of the team to which the building belonged)
-    team_id = 0 if event['teamId'] == Team.RED else 1  # team_id - id of the team that destroyed the building
+    team = 'blue' if event['teamId'] == Team.RED.value else 'red'  # team - name of the team that destroyed the building
 
     if event['buildingType'] in BUILDINGS:
         building_id = BUILDINGS.index(event['buildingType'])  # Tower, Inhibitor
-        frame_dict['teams'][team_id]['eventData']['buildingsDestroyed'][BUILDINGS_LABELS[building_id]] += 1
+        frame_dict['teams'][team]['eventData']['buildingsDestroyed'][BUILDINGS_LABELS[building_id]] += 1
 
     return frame_dict
 
@@ -182,7 +183,7 @@ def parse_turret_plate_destroyed_event(frame_dict: dict, event: dict) -> dict:
     player_id = event['killerId']
     if player_id >= len(frame_dict['participants']):
         return frame_dict
-    
+
     frame_dict['participants'][player_id]['eventData']['turretPlatesDestroyed'] += 1
 
     return frame_dict
