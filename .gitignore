@@ -163,3 +163,5 @@ cython_debug/
 
 data/
 viz/
+mongo-data/
+.mongo-data/
