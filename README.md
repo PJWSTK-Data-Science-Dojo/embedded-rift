@@ -7,11 +7,16 @@
 To run this project, you need the following API keys:
 - **OpenAI API Key**: Obtain an API key by signing up at [OpenAI](https://platform.openai.com/).
 - **Riot API Key**: Obtain an API key by signing up at [Riot Games Developer Portal](https://developer.riotgames.com/).
+- **Docker & Docker-Compose**: 
+  - **Docker**: Required to run MongoDB in a containerized environment. Download and install it from [Docker Desktop](https://www.docker.com/products/docker-desktop/).
+  - **Docker-Compose**: A tool for defining and running multi-container Docker applications. It usually comes with Docker but if needed, install it separately by following [Docker-Compose](https://docs.docker.com/compose/install/) Installation.
+- **Mongo Tools**: [Mongo Tools Download .msi](https://fastdl.mongodb.org/tools/db/mongodb-database-tools-windows-x86_64-100.11.0.msi)
 
 Once you have the keys, add them to the `.env` file as follows:
 ```env
 OPENAI_API_KEY=your_openai_api_key_here
 RIOT_API_KEY=your_riot_api_key_here
+MONGO_URI=
 ```
 
 ### 1. Create a Virtual Environment
@@ -67,3 +72,22 @@ Test the setup by running one of the scripts:
 ```bash
 python src/scripts/test.py
 ```
+
+### 7. Setup MongoDB with Docker
+The project includes a `docker-compose.yml` file that sets up **MongoDB.**
+
+## 7.1 Start MongoDB
+Run the following command in the project root:
+```bash
+docker-compose up -d
+```
+
+## 7.2 Import Database Backup
+You need to download the backup file (`games_mongo.gz`) and import it into MongoDB.
+
+1. Copy `games_mongo.gz` into the project root directory.
+2. Run the following command to restore the database:
+```bash
+mongorestore --gzip --archive=/games_mongo.gz --nsInclude=embedded-rift.games
+```
+
