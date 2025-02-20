@@ -18,6 +18,30 @@ from pymongo.collection import Collection
 import argparse
 
 
+@retry(
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    retry=retry_if_exception_type(ConnectionError),
+)
+def fetch_matches_with_retries(
+    api: RiotAPI,
+    summoner_id: str,
+    region: Region,
+    platform: Platform,
+    start_time: datetime,
+) -> Dict[str, Any]:
+    puuid: Optional[str] = api.get_puuid_by_summoner_id(platform, summoner_id)
+
+    if not puuid:
+        print(f"\n\nFailed to get PUUID for summoner ID: {summoner_id}\n")
+        return None
+
+    matches: List[str] = api.get_player_matches_ids(
+        region, puuid, start_time=start_time, count=10
+    )
+    return matches
+
+
 def get_high_elo_matches(api: RiotAPI, platform: Platform, region: Region) -> List[str]:
     """
     Fetches HighElo players and returns a list of match IDs.
@@ -42,15 +66,18 @@ def get_high_elo_matches(api: RiotAPI, platform: Platform, region: Region) -> Li
 
     for player in tqdm(high_elo_players, desc="Fetching Match IDs"):
         summoner_id: str = player["summonerId"]
-        puuid: Optional[str] = api.get_puuid_by_summoner_id(platform, summoner_id)
-
-        if not puuid:
-            print(f"\n\nFailed to get PUUID for summoner ID: {summoner_id}\n")
+        try:
+            matches = fetch_matches_with_retries(
+                api, summoner_id, region, platform, start_time
+            )
+        except ConnectionError as ce:
+            logging.error(f"ConnectionError for summoner ID: {summoner_id}: {ce}\n")
             continue
-
-        matches: List[str] = api.get_player_matches_ids(
-            region, puuid, start_time=start_time, count=10
-        )
+        except Exception as e:
+            logging.error(
+                f"Failed to fetch matches for summoner ID: {summoner_id}: {e}\n"
+            )
+            continue
         if matches:
             match_ids.update(matches)
 
