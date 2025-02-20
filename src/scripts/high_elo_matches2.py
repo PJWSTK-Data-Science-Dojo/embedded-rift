@@ -54,7 +54,9 @@ def get_high_elo_matches(api: RiotAPI, platform: Platform, region: Region) -> Li
         if matches:
             match_ids.update(matches)
 
-    file_name = f"data/high_elo_matches_final_{len(match_ids)}.json"
+    timestamp: str = datetime.now().strftime("%Y%m%d_%H%M%S")
+    file_name: str = f"data/{platform}-{timestamp}-{len(match_ids)}-matches-ids.json"
+
     with open(file_name, "w") as f:
         json.dump(list(match_ids), f, indent=4)
     print(f"Saved final {len(match_ids)} matches to {file_name}.")
@@ -154,4 +156,5 @@ if __name__ == "__main__":
     riot_api = RiotAPI(api_key=API_KEY)
 
     random_matches: List[str] = get_high_elo_matches(riot_api, PLATFORM, REGION)
+
     fetch_and_save_data(riot_api, REGION, random_matches, collection)
