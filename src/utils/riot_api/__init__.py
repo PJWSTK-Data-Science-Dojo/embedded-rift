@@ -30,12 +30,18 @@ class Platform(StrEnum):
     LATIN1 = "la1"
     LATIN2 = "la2"
 
+    def __str__(self):
+        return self.value
+
 
 class Region(StrEnum):
     AMERICA = "americas"
     EUROPE = "europe"
     ASIA = "asia"
     SEA = "sea"
+
+    def __str__(self):
+        return self.value
 
 
 class Tier(StrEnum):
@@ -47,12 +53,18 @@ class Tier(StrEnum):
     EMERALD = "EMERALD"
     DIAMOND = "DIAMOND"
 
+    def __str__(self):
+        return self.value
+
 
 class Division(StrEnum):
     IV = "IV"
     III = "III"
     II = "II"
     I = "I"
+
+    def __str__(self):
+        return self.value
 
 
 class RiotAPI(APIHandler):
