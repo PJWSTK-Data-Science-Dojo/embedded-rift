@@ -1,4 +1,4 @@
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Set
 from tqdm import tqdm
 from tenacity import (
     retry,
@@ -14,6 +14,7 @@ from utils.riot_api import RiotAPI, Platform, Region
 import random
 from datetime import datetime, timedelta
 from pymongo import MongoClient
+from pymongo.errors import ConnectionError, DuplicateKeyError
 from pymongo.collection import Collection
 import argparse
 
@@ -29,11 +30,14 @@ def fetch_matches_with_retries(
     region: Region,
     platform: Platform,
     start_time: datetime,
-) -> Dict[str, Any]:
+) -> Optional[List[str]]:
+    """
+    For a given summoner, fetch match IDs.
+    Returns a list of match IDs or None if puuid could not be obtained.
+    """
     puuid: Optional[str] = api.get_puuid_by_summoner_id(platform, summoner_id)
-
     if not puuid:
-        print(f"\n\nFailed to get PUUID for summoner ID: {summoner_id}\n")
+        print(f"Failed to get PUUID for summoner ID: {summoner_id}")
         return None
 
     matches: List[str] = api.get_player_matches_ids(
@@ -42,100 +46,99 @@ def fetch_matches_with_retries(
     return matches
 
 
-def get_high_elo_matches(api: RiotAPI, platform: Platform, region: Region) -> List[str]:
-    """
-    Fetches HighElo players and returns a list of match IDs.
-    """
-    print("Fetching HighElo players...")
-    high_elo_players: List[Dict[str, Any]] = api.get_apex_tiers_summoner_ids(platform)
-
-    if not high_elo_players:
-        print("No HighElo players found.")
-        return []
-
-    print(f"Found {len(high_elo_players)} HighElo players.")
-
-    with open("data/high_elo_players.json", "w") as f:
-        json.dump(high_elo_players, f, indent=4)
-
-    # Shuffle players to ensure randomness
-    random.shuffle(high_elo_players)
-
-    match_ids: set[str] = set()
-    start_time = datetime.now() - timedelta(days=7)
-
-    for player in tqdm(high_elo_players, desc="Fetching Match IDs"):
-        summoner_id: str = player["summonerId"]
-        try:
-            matches = fetch_matches_with_retries(
-                api, summoner_id, region, platform, start_time
-            )
-        except ConnectionError as ce:
-            logging.error(f"ConnectionError for summoner ID: {summoner_id}: {ce}\n")
-            continue
-        except Exception as e:
-            logging.error(
-                f"Failed to fetch matches for summoner ID: {summoner_id}: {e}\n"
-            )
-            continue
-        if matches:
-            match_ids.update(matches)
-
-    timestamp: str = datetime.now().strftime("%Y%m%d_%H%M%S")
-    file_name: str = f"data/{platform}-{timestamp}-{len(match_ids)}-matches-ids.json"
-
-    with open(file_name, "w") as f:
-        json.dump(list(match_ids), f, indent=4)
-    print(f"Saved final {len(match_ids)} matches to {file_name}.")
-
-    return list(match_ids)
-
-
-# Configure logging
-logging.basicConfig(
-    filename="error.log",
-    level=logging.ERROR,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-)
-
-
 @retry(
     stop=stop_after_attempt(5),
     wait=wait_exponential(multiplier=1, min=2, max=10),
     retry=retry_if_exception_type(ConnectionError),
 )
 def fetch_with_retries(api: RiotAPI, region: Region, match_id: str) -> Dict[str, Any]:
+    """
+    Fetches match data for a given match_id.
+    """
     return api.get_match_data(region, match_id)
 
 
-def fetch_and_save_data(
+def fetch_and_save_player_matches(
     api: RiotAPI,
+    platform: Platform,
     region: Region,
-    match_ids: List[str],
     collection: Collection,
-    max_attempts: int = 3,
 ) -> None:
     """
-    Iterates through match_ids, fetching match data and saving it to MongoDB.
-    If fetching fails (whether due to ConnectionError or another Exception),
-    the match ID is saved to a corresponding failed list. At the end, these
-    failed match IDs are written to JSON files.
+    For each high-elo player:
+      - Fetch match IDs.
+      - For each match ID not already in MongoDB, fetch the match data and insert it.
+    Maintains a set of existing match IDs (based on metadata.matchId).
+    Logs and saves IDs of failed fetches.
     """
+    print("Fetching HighElo players...")
+    high_elo_players: List[Dict[str, Any]] = api.get_apex_tiers_summoner_ids(platform)
+    if not high_elo_players:
+        print("No HighElo players found.")
+        return
+
+    print(f"Found {len(high_elo_players)} HighElo players.")
+
+    # Save players for reference.
+    with open("data/high_elo_players.json", "w") as f:
+        json.dump(high_elo_players, f, indent=4)
+
+    # Shuffle players for randomness.
+    random.shuffle(high_elo_players)
+    start_time = datetime.now() - timedelta(days=7)
+
+    # Build a set of already-fetched match IDs from the collection.
+    existing_matches: Set[str] = set()
+    for doc in tqdm(
+        collection.find({}, {"metadata.matchId": 1}), desc="Fetching existing matches"
+    ):
+        metadata = doc.get("metadata", {})
+        match_id = metadata.get("matchId")
+        if match_id:
+            existing_matches.add(match_id)
+
+    print(f"Found {len(existing_matches)} existing matches in the database.")
+
     failed_connection_ids: List[str] = []
     failed_exception_ids: List[str] = []
 
-    for match_id in tqdm(match_ids, desc="Fetching Matches Data"):
+    # Process each player.
+    for player in tqdm(high_elo_players, desc="Processing players"):
+        summoner_id: str = player["summonerId"]
         try:
-            match = fetch_with_retries(api, region, match_id)
-            collection.insert_one(match)
-        except ConnectionError as ce:
-            logging.error(f"ConnectionError for match {match_id}: {ce}")
-            failed_connection_ids.append(match_id)
+            match_ids: Optional[List[str]] = fetch_matches_with_retries(
+                api, summoner_id, region, platform, start_time
+            )
         except Exception as e:
-            logging.error(f"Failed to fetch match {match_id}: {e}")
-            failed_exception_ids.append(match_id)
+            logging.error(f"Error fetching matches for summoner ID {summoner_id}: {e}")
+            continue
 
-    # Save failed match IDs to separate JSON files
+        if not match_ids:
+            continue
+
+        # For each match id, check if it already exists.
+        for match_id in match_ids:
+            if match_id in existing_matches:
+                print(f"Skipping match {match_id} (already in DB)")
+                continue
+
+            try:
+                match: Dict[str, Any] = fetch_with_retries(api, region, match_id)
+                # Optionally, set the document _id as the match id from metadata.
+                if match.get("metadata", {}).get("matchId"):
+                    match["_id"] = match["metadata"]["matchId"]
+                existing_matches.add(match["metadata"]["matchId"])
+                collection.insert_one(match)
+            except ConnectionError as ce:
+                logging.error(f"ConnectionError for match {match_id}: {ce}")
+                failed_connection_ids.append(match_id)
+            except DuplicateKeyError as dke:
+                pass  # Ignore duplicate key errors.
+            except Exception as e:
+                logging.error(f"Failed to fetch match {match_id}: {e}")
+                failed_exception_ids.append(match_id)
+
+    # Save failed match IDs to separate JSON files.
     with open("data/failed_connection_matches.json", "w") as f:
         json.dump(failed_connection_ids, f, indent=4)
     with open("data/failed_exception_matches.json", "w") as f:
@@ -150,16 +153,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "-p",
         "--platform",
-        type=Platform,  # Convert argument to the corresponding Enum member
-        choices=list(Platform),  # Restrict choices to enum members
+        type=Platform,
+        choices=list(Platform),
         default=Platform.EUW,
         help="Platform to fetch data from",
     )
     parser.add_argument(
         "-r",
         "--region",
-        type=Region,  # Convert argument to the corresponding Enum member
-        choices=list(Region),  # Restrict choices to enum members
+        type=Region,
+        choices=list(Region),
         default=Region.EUROPE,
         help="Region to fetch data from",
     )
@@ -182,6 +185,4 @@ if __name__ == "__main__":
 
     riot_api = RiotAPI(api_key=API_KEY)
 
-    random_matches: List[str] = get_high_elo_matches(riot_api, PLATFORM, REGION)
-
-    fetch_and_save_data(riot_api, REGION, random_matches, collection)
+    fetch_and_save_player_matches(riot_api, PLATFORM, REGION, collection)
