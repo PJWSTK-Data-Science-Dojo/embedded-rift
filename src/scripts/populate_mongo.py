@@ -14,7 +14,7 @@ from utils.riot_api import RiotAPI, Platform, Region
 import random
 from datetime import datetime, timedelta
 from pymongo import MongoClient
-from pymongo.errors import ConnectionError, DuplicateKeyError
+from pymongo.errors import DuplicateKeyError
 from pymongo.collection import Collection
 import argparse
 
