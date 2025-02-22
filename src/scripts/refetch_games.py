@@ -74,7 +74,7 @@ def refetch_games(
                 collection.insert_one(game_data)
                 pbar.update(1)
             except Exception as e:
-                logging.error(f"Failed to fetch game data for game ID: {game_id}.")
+                logging.error(f"Failed to fetch game data for game ID: {game_id}: {e}")
                 games.append(game_id)
 
 
