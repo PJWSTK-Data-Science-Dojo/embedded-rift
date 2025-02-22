@@ -1,18 +1,28 @@
 import os
-import json
 import h5py
 import numpy as np
 from typing import Any, Dict, List
 from pymongo import MongoClient
-from dataclasses import dataclass, asdict
 from dotenv import load_dotenv
 from utils.training.game_to_frames import extract_game_data
 from tqdm import tqdm
+import concurrent.futures
+import itertools
 
 
-# ---------------------------
-# HDF5 writing functions
-# ---------------------------
+def batched(iterable, n):
+    """
+    Batch data into lists of length n. The last batch may be shorter.
+    Source: https://docs.python.org/3/library/itertools.html#itertools-recipes
+    """
+    it = iter(iterable)
+    while True:
+        batch = list(itertools.islice(it, n))
+        if not batch:
+            break
+        yield batch
+
+
 def write_game_to_hdf5(
     game_input: Dict[str, Any], hf: h5py.File, games_group_name: str = "games"
 ) -> None:
@@ -26,12 +36,11 @@ def write_game_to_hdf5(
         print(f"Game {game_id} has no frames, skipping.")
         return
 
-    # Use the first frame to determine the vector order.
-    # (We assume each flattened frame has the same keys.)
+    # Use the first frame to determine the vector order (assumes all frames have the same keys).
     first_frame = frames[0]
-    keys_order = list(first_frame.keys())  # relying on insertion order
+    keys_order = list(first_frame.keys())
 
-    # Convert each frame (dict) into a vector (list) following keys_order.
+    # Convert each frame (dict) into a vector following keys_order.
     frame_vectors = []
     for frame in frames:
         vector = [float(frame.get(key, 0)) for key in keys_order]
@@ -52,21 +61,26 @@ def write_game_to_hdf5(
     ds.attrs["early_surrender"] = int(game_input["early_surrender"])
     ds.attrs["surrender"] = int(game_input["surrender"])
     ds.attrs["blue_win"] = int(game_input["blue_win"])
-    # print(f"Stored game {game_id} with shape {frame_array.shape}")
 
 
-def process_games_to_hdf5(
-    mongo_uri: str, db_name: str, collection_name: str, hdf5_filename: str
+def process_games_to_hdf5_parallel(
+    mongo_uri: str,
+    db_name: str,
+    collection_name: str,
+    hdf5_filename: str,
+    num_workers: int = 4,
+    batch_size: int = 1000,
 ) -> None:
     """
-    Connects to MongoDB, iterates over games, extracts game data, and writes each game
-    to an HDF5 file. Checks if the game is already in the file and skips it if so.
+    Connects to MongoDB, processes games in batches to avoid loading all data into RAM,
+    extracts game data in parallel using multiple processes, and writes each game to an HDF5 file.
+    Checks for duplicates to avoid re-writing existing games.
     """
     client = MongoClient(mongo_uri)
     db = client[db_name]
     collection = db[collection_name]
 
-    # Open HDF5 file in append mode so that we don't overwrite existing data.
+    # Open the HDF5 file in append mode.
     with h5py.File(hdf5_filename, "a") as hf:
         # Get or create the "games" group.
         if "games" in hf:
@@ -75,15 +89,26 @@ def process_games_to_hdf5(
             games_group = hf.create_group("games")
 
         cursor = collection.find({})  # Optionally add filters to your query.
-        for game in tqdm(cursor):
-            game_input = extract_game_data(game)
-            game_id = game_input["game_id"]
-            # Check if game_id already exists in the group.
-            if game_id in games_group:
-                print(f"Game {game_id} already exists, skipping.")
-                continue
-            # Write the new game.
-            write_game_to_hdf5(game_input, hf)
+        total_processed = 0
+        # Process documents in batches.
+        for batch in batched(cursor, batch_size):
+            print(f"Processing a batch of {len(batch)} games...")
+            with concurrent.futures.ProcessPoolExecutor(
+                max_workers=num_workers
+            ) as executor:
+                # Process each game in the current batch in parallel.
+                results = list(
+                    tqdm(executor.map(extract_game_data, batch), total=len(batch))
+                )
+            # Write each extracted game sequentially (to avoid HDF5 concurrency issues).
+            for game_input in results:
+                game_id = game_input["game_id"]
+                if game_id in games_group:
+                    # Skip if the game is already stored.
+                    continue
+                write_game_to_hdf5(game_input, hf)
+            total_processed += len(batch)
+            print(f"Total games processed so far: {total_processed}")
     print(f"Finished processing games into {hdf5_filename}")
 
 
@@ -97,4 +122,4 @@ if __name__ == "__main__":
     collection_name = "games"  # Update as needed
     hdf5_filename = "games_data.h5"  # Output HDF5 file
 
-    process_games_to_hdf5(mongo_uri, db_name, collection_name, hdf5_filename)
+    process_games_to_hdf5_parallel(mongo_uri, db_name, collection_name, hdf5_filename)
