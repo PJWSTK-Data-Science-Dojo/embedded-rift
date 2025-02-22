@@ -31,6 +31,7 @@ def parse_match_result(match_result_json):
             participant.pop(key, None)
         participants.append(participant)
 
+    result["teams"] = {}
     result["teams"]["blue"] = match_result_json["info"]["teams"][0]
     result["teams"]["red"] = match_result_json["info"]["teams"][1]
 
