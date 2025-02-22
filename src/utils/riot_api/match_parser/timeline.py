@@ -1,5 +1,7 @@
 from . import Team
+from copy import deepcopy
 
+# fmt: off
 IGNORED = {2003, 2031, 2055,  # Health Potion, Refillable Potion, Control Ward
            2138, 2139, 2140,  # Elixir of Iron, Elixir of Sorcery, Elixir of Wrath
            3340, 3363, 3364}  # Stealth Ward, Farsight Alteration, Oracle Lens
@@ -32,9 +34,9 @@ def parse_timeline(timeline_json: dict) -> dict:
         if i > 0:
             # Load event data from previous frame
             for team in ['blue', 'red']:
-                frame_dict['teams'][team]['eventData'] = parsed_frames[i - 1]['teams'][team]['eventData'].copy()
+                frame_dict['teams'][team]['eventData'] = deepcopy(parsed_frames[i - 1]['teams'][team]['eventData'])
             for participant_id in range(10):
-                frame_dict['participants'][participant_id]['eventData'] = parsed_frames[i - 1]['participants'][participant_id]['eventData'].copy()
+                frame_dict['participants'][participant_id]['eventData'] = deepcopy(parsed_frames[i - 1]['participants'][participant_id]['eventData'])
 
         for event in frame['events']:
             # Update current frame dict based on happening events
@@ -59,6 +61,7 @@ def parse_timeline(timeline_json: dict) -> dict:
         for player_id in range(10):
             participantFrame = frame['participantFrames'][str(player_id + 1)]
             frame_dict['participants'][player_id] = {**frame_dict['participants'][player_id], **participantFrame}
+
         parsed_frames.append(frame_dict)
 
     for i in range(len(parsed_frames)):
@@ -76,7 +79,7 @@ def init_team_event_data() -> dict[str, int | dict[str, int]]:
         'buildingsDestroyed': {label: 0 for label in BUILDINGS_LABELS}
     }
 
-    return event_data
+    return deepcopy(event_data)
 
 
 def init_player_event_data() -> dict[str, int | list[int]]:
@@ -88,7 +91,7 @@ def init_player_event_data() -> dict[str, int | list[int]]:
         'wardsPlaced': 0, 'wardsDestroyed': 0
     }
 
-    return event_data
+    return deepcopy(event_data)
 
 
 def parse_champion_kill_event(frame_dict: dict, event: dict) -> dict:
