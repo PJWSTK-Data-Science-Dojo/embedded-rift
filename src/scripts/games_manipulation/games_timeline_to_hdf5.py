@@ -26,12 +26,9 @@ def write_game_to_hdf5(
         print(f"Game {game_id} has no frames, skipping.")
         return
 
-    # Use the first frame to determine the vector order.
-    # (We assume each flattened frame has the same keys.)
     first_frame = frames[0]
-    keys_order = list(first_frame.keys())  # relying on insertion order
+    keys_order = list(first_frame.keys())
 
-    # Convert each frame (dict) into a vector (list) following keys_order.
     frame_vectors = []
     for frame in frames:
         vector = [float(frame.get(key, 0)) for key in keys_order]
@@ -81,8 +78,9 @@ def process_games_to_hdf5(
 if __name__ == "__main__":
     load_dotenv()
     mongo_uri = os.getenv("MONGO_URI")
+    print(mongo_uri)
     db_name = "embedded-rift"  # Update as needed
     collection_name = "games"  # Update as needed
-    hdf5_filename = "games_data.h5"  # Output HDF5 file
+    hdf5_filename = "data/games_data.h5"  # Output HDF5 file
 
     process_games_to_hdf5(mongo_uri, db_name, collection_name, hdf5_filename)
