@@ -8,23 +8,58 @@ from dataclasses import dataclass, asdict
 from dotenv import load_dotenv
 from utils.training.game_to_frames import extract_game_data
 from tqdm import tqdm
+from pathlib import Path
 
 
-# ---------------------------
-# HDF5 writing functions
-# ---------------------------
-def write_game_to_hdf5(
-    game_input: Dict[str, Any], hf: h5py.File, games_group_name: str = "games"
-) -> None:
+def write_champions_to_hdf5(game_input: Dict[str, Any], hf: h5py.File) -> None:
     """
-    Writes one game's data (a flattened sequence of frames and metadata) into the HDF5 file.
-    The game is stored as its own dataset under the group 'games'.
+    Writes the champions' data into the HDF5 file.
     """
+    collection = "champions"
+    game_id = game_input["game_id"]
+    blue_champions = game_input["blue_champions"]
+    red_champions = game_input["red_champions"]
+
+    champions_group = hf[collection]
+
+    # Create a dataset for this game using its game_id.
+    ds = champions_group.create_dataset(
+        game_id,
+        data=[blue_champions, red_champions],
+        dtype=np.int32,
+    )
+    # print(f"Stored champions for game {game_id}")
+
+
+def write_game_metadata_to_hdf5(game_input: Dict[str, Any], hf: h5py.File) -> None:
+    """
+    Writes the game's metadata into the HDF5 file.
+    """
+    collection = "games"
+    game_id = game_input["game_id"]
+    game_duration = game_input["game_duration"]
+    early_surrender = int(game_input["early_surrender"])
+    surrender = int(game_input["surrender"])
+    blue_win = int(game_input["blue_win"])
+
+    metadata_group = hf[collection]
+
+    # Create a dataset for this game using its game_id.
+    ds = metadata_group.create_dataset(
+        game_id,
+        data=[game_duration, early_surrender, surrender, blue_win],
+        dtype=np.int32,
+    )
+    # print(f"Stored metadata for game {game_id}")
+
+
+def write_frames_to_hdf5(game_input: Dict[str, Any], hf: h5py.File) -> None:
+    """
+    Writes the frames' data into the HDF5 file.
+    """
+    collection = "frames"
     game_id = game_input["game_id"]
     frames = game_input["frames"]
-    if not frames:
-        print(f"Game {game_id} has no frames, skipping.")
-        return
 
     first_frame = frames[0]
     keys_order = list(first_frame.keys())
@@ -35,21 +70,52 @@ def write_game_to_hdf5(
         frame_vectors.append(vector)
     frame_array = np.array(frame_vectors, dtype=np.float32)
 
-    # Ensure the "games" group exists.
-    if games_group_name in hf:
-        games_group = hf[games_group_name]
-    else:
-        games_group = hf.create_group(games_group_name)
+    frames_group = hf[collection]
 
     # Create a dataset for this game using its game_id.
-    ds = games_group.create_dataset(
+    ds = frames_group.create_dataset(
         game_id, data=frame_array, compression="gzip", compression_opts=4
     )
+
     ds.attrs["game_duration"] = game_input["game_duration"]
     ds.attrs["early_surrender"] = int(game_input["early_surrender"])
     ds.attrs["surrender"] = int(game_input["surrender"])
     ds.attrs["blue_win"] = int(game_input["blue_win"])
-    # print(f"Stored game {game_id} with shape {frame_array.shape}")
+
+
+def write_items_to_hdf5(game_input: Dict[str, Any], hf: h5py.File) -> None:
+    """
+    Writes the items' data into the HDF5 file.
+    """
+    game_id = game_input["game_id"]
+    items_per_frame: List[List[int]] = game_input["items_per_frame"]
+    collection = "items_per_frame"
+    items_group = hf[collection]
+
+    ds = items_group.create_dataset(
+        game_id,
+        data=items_per_frame,
+        dtype=np.int32,
+    )
+
+
+# ---------------------------
+# HDF5 writing functions
+# ---------------------------
+def write_game_to_hdf5(game_input: Dict[str, Any], hf: h5py.File) -> None:
+    """
+    Writes one game's data (a flattened sequence of frames and metadata) into the HDF5 file.
+    The game is stored as its own dataset under the group 'games'.
+    """
+    game_id = game_input["game_id"]
+
+    if game_id in hf["games"]:
+        return
+
+    write_game_metadata_to_hdf5(game_input, hf)
+    write_frames_to_hdf5(game_input, hf)
+    write_champions_to_hdf5(game_input, hf)
+    write_items_to_hdf5(game_input, hf)
 
 
 def process_games_to_hdf5(
@@ -62,13 +128,22 @@ def process_games_to_hdf5(
     client = MongoClient(mongo_uri)
     db = client[db_name]
     collection = db[collection_name]
+    path = Path(hdf5_filename)
+    files_exist = path.exists()
 
     # Open HDF5 file in append mode so that we don't overwrite existing data.
     with h5py.File(hdf5_filename, "a") as hf:
+        if not files_exist:
+            hf.create_group("games")
+            hf.create_group("frames")
+            hf.create_group("champions")
+            hf.create_group("items_per_frame")
+
         cursor = collection.find({})  # Optionally add filters to your query.
         for game in tqdm(cursor):
             game_input = extract_game_data(game)
             write_game_to_hdf5(game_input, hf)
+
     print(f"Finished processing games into {hdf5_filename}")
 
 

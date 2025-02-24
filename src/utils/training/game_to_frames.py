@@ -1,4 +1,4 @@
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 from dataclasses import asdict, dataclass
 import numpy as np
 from dotenv import load_dotenv
@@ -13,16 +13,9 @@ warnings.filterwarnings("ignore", category=RuntimeWarning)
 
 @dataclass
 class PlayerFrame:
-    champion_id: int
     kills: int
     deaths: int
     assists: int
-    item1: int
-    item2: int
-    item3: int
-    item4: int
-    item5: int
-    item6: int
     # skills: List[int]
     turretPlatesDestroyed: int
     wardsPlaced: int
@@ -125,6 +118,9 @@ class FrameInput:
 class GameInput:
     game_id: str
     frames: List[Dict[str, Any]]  # Flatten
+    blue_champions: List[int]
+    red_champions: List[int]
+    items_per_frame: List[List[int]]
     game_duration: int
     early_surrender: bool = False
     surrender: bool = False
@@ -164,7 +160,7 @@ def extract_player(
     player_result: Dict[str, int],
     frame_index: int,
     game_duration: float,
-) -> PlayerFrame:
+) -> Tuple[PlayerFrame, List[int]]:
     """
     Extracts team-level data (objectives and player frames) from the team_data dictionary.
     """
@@ -192,67 +188,63 @@ def extract_player(
     cs: Dict[str, int] = p.get("championStats", {})
     ds: Dict[str, int] = p.get("damageStats", {})
 
-    return PlayerFrame(
-        champion_id=player_result.get("championId", 0),
-        kills=ed.get("kills", 0),
-        deaths=ed.get("deaths", 0),
-        assists=ed.get("assists", 0),
-        item1=items[0] if len(items) > 0 else 0,
-        item2=items[1] if len(items) > 1 else 0,
-        item3=items[2] if len(items) > 2 else 0,
-        item4=items[3] if len(items) > 3 else 0,
-        item5=items[4] if len(items) > 4 else 0,
-        item6=items[5] if len(items) > 5 else 0,
-        turretPlatesDestroyed=ed.get("turretPlatesDestroyed", 0),
-        wardsPlaced=ed.get("wardsPlaced", 0),
-        wardsDestroyed=ed.get("wardsDestroyed", 0),
-        abilityHaste=cs.get("abilityHaste", 0),
-        abilityPower=cs.get("abilityPower", 0),
-        armor=cs.get("armor", 0),
-        armorPen=cs.get("armorPen", 0),
-        armorPenPercent=cs.get("armorPenPercent", 0),
-        attackDamage=cs.get("attackDamage", 0),
-        attackSpeed=cs.get("attackSpeed", 0),
-        bonusArmorPenPercent=cs.get("bonusArmorPenPercent", 0),
-        bonusMagicPenPercent=cs.get("bonusMagicPenPercent", 0),
-        ccReduction=cs.get("ccReduction", 0),
-        cooldownReduction=cs.get("cooldownReduction", 0),
-        healthMax=cs.get("healthMax", 0),
-        healthRegen=cs.get("healthRegen", 0),
-        lifesteal=cs.get("lifesteal", 0),
-        magicPen=cs.get("magicPen", 0),
-        magicPenPercent=cs.get("magicPenPercent", 0),
-        magicResist=cs.get("magicResist", 0),
-        movementSpeed=cs.get("movementSpeed", 0),
-        omnivamp=cs.get("omnivamp", 0),
-        physicalVamp=cs.get("physicalVamp", 0),
-        spellVamp=cs.get("spellVamp", 0),
-        jungleMinionsKilled=p.get("jungleMinionsKilled", 0),
-        minionsKilled=p.get("minionsKilled", 0),
-        totalGold=p.get("totalGold", 0),
-        currentGold=p.get("currentGold", 0),
-        goldPerSecond=p.get("goldPerSecond", 0),
-        level=p.get("level", 0),
-        xp=p.get("xp", 0),
-        magicDamageDone=ds.get("magicDamageDone", 0),
-        magicDamageDoneToChampions=ds.get("magicDamageDoneToChampions", 0),
-        magicDamageTaken=ds.get("magicDamageTaken", 0),
-        physicalDamageDone=ds.get("physicalDamageDone", 0),
-        physicalDamageDoneToChampions=ds.get("physicalDamageDoneToChampions", 0),
-        physicalDamageTaken=ds.get("physicalDamageTaken", 0),
-        totalDamageDone=ds.get("totalDamageDone", 0),
-        totalDamageDoneToChampions=ds.get("totalDamageDoneToChampions", 0),
-        totalDamageTaken=ds.get("totalDamageTaken", 0),
-        trueDamageDone=ds.get("trueDamageDone", 0),
-        trueDamageDoneToChampions=ds.get("trueDamageDoneToChampions", 0),
-        trueDamageTaken=ds.get("trueDamageTaken", 0),
-        visionScore=visionScore,
-        totalHeal=totalHeal,
-        totalDamageShieldedOnTeammates=totalDamageShieldedOnTeammates,
-        totalDamageToBuildings=totalDamageToBuildings,
-        totalDamageToObjectives=totalDamageToObjectives,
-        selfMitigatedDamage=selfMitigatedDamage,
-        timeEnemySpentControlled=p.get("timeEnemySpentControlled", 0),
+    return (
+        PlayerFrame(
+            kills=ed.get("kills", 0),
+            deaths=ed.get("deaths", 0),
+            assists=ed.get("assists", 0),
+            turretPlatesDestroyed=ed.get("turretPlatesDestroyed", 0),
+            wardsPlaced=ed.get("wardsPlaced", 0),
+            wardsDestroyed=ed.get("wardsDestroyed", 0),
+            abilityHaste=cs.get("abilityHaste", 0),
+            abilityPower=cs.get("abilityPower", 0),
+            armor=cs.get("armor", 0),
+            armorPen=cs.get("armorPen", 0),
+            armorPenPercent=cs.get("armorPenPercent", 0),
+            attackDamage=cs.get("attackDamage", 0),
+            attackSpeed=cs.get("attackSpeed", 0),
+            bonusArmorPenPercent=cs.get("bonusArmorPenPercent", 0),
+            bonusMagicPenPercent=cs.get("bonusMagicPenPercent", 0),
+            ccReduction=cs.get("ccReduction", 0),
+            cooldownReduction=cs.get("cooldownReduction", 0),
+            healthMax=cs.get("healthMax", 0),
+            healthRegen=cs.get("healthRegen", 0),
+            lifesteal=cs.get("lifesteal", 0),
+            magicPen=cs.get("magicPen", 0),
+            magicPenPercent=cs.get("magicPenPercent", 0),
+            magicResist=cs.get("magicResist", 0),
+            movementSpeed=cs.get("movementSpeed", 0),
+            omnivamp=cs.get("omnivamp", 0),
+            physicalVamp=cs.get("physicalVamp", 0),
+            spellVamp=cs.get("spellVamp", 0),
+            jungleMinionsKilled=p.get("jungleMinionsKilled", 0),
+            minionsKilled=p.get("minionsKilled", 0),
+            totalGold=p.get("totalGold", 0),
+            currentGold=p.get("currentGold", 0),
+            goldPerSecond=p.get("goldPerSecond", 0),
+            level=p.get("level", 0),
+            xp=p.get("xp", 0),
+            magicDamageDone=ds.get("magicDamageDone", 0),
+            magicDamageDoneToChampions=ds.get("magicDamageDoneToChampions", 0),
+            magicDamageTaken=ds.get("magicDamageTaken", 0),
+            physicalDamageDone=ds.get("physicalDamageDone", 0),
+            physicalDamageDoneToChampions=ds.get("physicalDamageDoneToChampions", 0),
+            physicalDamageTaken=ds.get("physicalDamageTaken", 0),
+            totalDamageDone=ds.get("totalDamageDone", 0),
+            totalDamageDoneToChampions=ds.get("totalDamageDoneToChampions", 0),
+            totalDamageTaken=ds.get("totalDamageTaken", 0),
+            trueDamageDone=ds.get("trueDamageDone", 0),
+            trueDamageDoneToChampions=ds.get("trueDamageDoneToChampions", 0),
+            trueDamageTaken=ds.get("trueDamageTaken", 0),
+            visionScore=visionScore,
+            totalHeal=totalHeal,
+            totalDamageShieldedOnTeammates=totalDamageShieldedOnTeammates,
+            totalDamageToBuildings=totalDamageToBuildings,
+            totalDamageToObjectives=totalDamageToObjectives,
+            selfMitigatedDamage=selfMitigatedDamage,
+            timeEnemySpentControlled=p.get("timeEnemySpentControlled", 0),
+        ),
+        items,
     )
 
 
@@ -261,7 +253,7 @@ def extract_team(
     team_result: Dict[int, Dict[str, int]],
     frame_index: int,
     game_duration: float,
-) -> Team:
+) -> Tuple[Team, List[int]]:
     """
     Extracts a Team object from team_data, interpolating missing player fields.
     final_stats_map maps participantId to a dictionary of final post-game values.
@@ -282,14 +274,16 @@ def extract_team(
     )
     # print(team_result)
     players = []
+    team_items = []
     for i, p in enumerate(team_data["participants"]):
         # print(participant_id)
         # Get the final post-game stats for this participant.
         player_reult = team_result["participants"][i]
-        player = extract_player(p, player_reult, frame_index, game_duration)
+        player, items = extract_player(p, player_reult, frame_index, game_duration)
         players.append(player)
+        team_items.extend(items)
 
-    return Team(objectives=objectives, players=players)
+    return Team(objectives=objectives, players=players), team_items
 
 
 def flatten_dict(
@@ -351,6 +345,15 @@ def extract_game_data(game_data: Dict[str, Any]) -> Dict[str, Any]:
 
     raw_duration = game_duration
     game_duration = np.ceil(game_duration / 60)
+    items_per_frame = []
+    blue_champions = []
+
+    for player in blue_result["participants"]:
+        blue_champions.append(player["championId"])
+
+    red_champions = []
+    for player in red_result["participants"]:
+        red_champions.append(player["championId"])
 
     # Assume timeline frames are evenly spaced. Compute elapsed time for each frame.
     for idx, frame in enumerate(timeline):
@@ -358,26 +361,32 @@ def extract_game_data(game_data: Dict[str, Any]) -> Dict[str, Any]:
         teams_frame = frame.get("teams", {})
 
         blue_frame = teams_frame.get("blue", {})
+
         if not blue_frame:
             blue_frame = teams_frame.get(0, {})
 
-        blue_team = extract_team(
+        items_in_frame = []
+        blue_team, blue_items = extract_team(
             blue_frame,
             blue_result,
             idx,
             game_duration,
         )
+        items_in_frame.extend(blue_items)
 
         red_frame = teams_frame.get("red", {})
         if not red_frame:
             red_frame = teams_frame.get(1, {})
 
-        red_team = extract_team(
+        red_team, red_items = extract_team(
             red_frame,
             red_result,
             idx,
             game_duration,
         )
+        items_in_frame.extend(red_items)
+
+        items_per_frame.append(items_in_frame)
         frame_input = FrameInput(blue=blue_team, red=red_team)
         frame_sequence.append(flatten_dict(asdict(frame_input)))
 
@@ -385,6 +394,9 @@ def extract_game_data(game_data: Dict[str, Any]) -> Dict[str, Any]:
         game_id=game_id,
         frames=frame_sequence,
         game_duration=raw_duration,
+        items_per_frame=items_per_frame,
+        blue_champions=blue_champions,
+        red_champions=red_champions,
         early_surrender=early_surrender,
         surrender=surrender,
         blue_win=blue_result.get("win", False),
@@ -409,4 +421,4 @@ if __name__ == "__main__":
     # frames = [flatten_dict(frame) for frame in game_data["frames"]]
 
     with open("frames.json", "w") as f:
-        json.dump(game_data, f, indent=4)
+        json.dump(game_data, f, indent=1)
