@@ -152,9 +152,11 @@ def process_games_to_hdf5(
             hf.create_group("items_per_frame")
 
         cursor = collection.find({})  # Optionally add filters to your query.
-        for game in tqdm(cursor):
+        for i, game in tqdm(enumerate(cursor)):
             game_input = extract_game_data(game)
             write_game_to_hdf5(game_input, hf)
+            if i > 10_000:
+                break
 
     print(f"Finished processing games into {hdf5_filename}")
 
