@@ -1,0 +1,14 @@
+{
+  "has_mobility": "The ability moves caster from one place to another (e.g., dash, blink, jump, teleport). Do not consider a speedup as a mobility effect.",
+  "has_stealth": "The ability renders the target invisible to enemies. Consider both invisibility and camouflage as stealth.",
+  "has_slow": "The ability has a slowing effect.",
+  "has_hard_cc": "The ability has a hard crowd control effect that removes all control of the champion (e.g., Airborne, Stun, Taunt, Suppression).",
+  "has_soft_cc": "The ability has a soft crowd control effect that removes the control of the champion only partially (e.g., Silence, Ground, Root). Do not consider slow as a soft CC.",
+  "removes_cc": "The ability removes some crowd control effects (e.g., Blind, Root, Stun) from the target. Do not consider slow as a CC.",
+  "removes_slow": "The ability removes a slow effect.",
+  "has_heal": "The ability restores health to the target.",
+  "has_spellshield": "The ability grants a shield that entirely blocks the next incoming spell (e.g., Sivir E, Nocturne W).",
+  "has_shield": "The ability grants a shield that absorbs incoming damage.",
+  "has_ad_shield": "The ability grants a shield that specifically blocks physical damage.",
+  "has_ap_shield": "The ability grants a shield that specifically blocks magic damage."
+}
