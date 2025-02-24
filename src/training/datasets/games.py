@@ -5,6 +5,7 @@ from typing import Any, Dict
 from torch.utils.data import Dataset
 from dotenv import load_dotenv
 from tqdm import tqdm
+from utils.champion import CHAMP_ID_TO_INDEX, CHAMPION_IDS
 
 
 class GamesDataset(Dataset):
@@ -49,6 +50,7 @@ class GamesDataset(Dataset):
         rep_frames = []
         with h5py.File(self.hdf5_filename, "r") as hf:
             frames_group = hf["frames"]
+
             for game_id in tqdm(frames_group, desc="Processing games for norm params"):
                 ds = frames_group[game_id]
                 game_duration = ds.attrs.get("game_duration", 0)
@@ -89,7 +91,15 @@ class GamesDataset(Dataset):
             blue_win = bool(frames_ds.attrs.get("blue_win", 0))
 
             # Load champions from the 'champions' group.
-            champions = hf["champions"][game_id][:]
+            champions = hf["champions"][game_id][:]  # shape: (2, 5)
+            champions = np.array(
+                [
+                    CHAMP_ID_TO_INDEX[champion]
+                    for team in champions
+                    for champion in team
+                ],
+                dtype=np.int32,
+            )
             # Load items from the 'items_per_frame' group.
             items = hf["items_per_frame"][game_id][:]
 
@@ -104,7 +114,7 @@ class GamesDataset(Dataset):
             "early_surrender": early_surrender,
             "surrender": surrender,
             "blue_win": blue_win,
-            "champions": champions,  # shape: (2, 5)
+            "champions": champions,  # shape: (10,)
             "items": items,  # shape: (num_frames, 60)
             "norm_means": self.norm_means,
             "norm_stds": self.norm_stds,
