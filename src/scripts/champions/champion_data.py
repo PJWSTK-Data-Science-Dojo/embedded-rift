@@ -4,13 +4,15 @@ from dataclasses import asdict
 import tqdm
 
 if __name__ == "__main__":
-    champion = "Xin Zhao"
-    # data = LoLScraper.get_champion_data(champion)
     scraper = LoLScraper()
-    scraper.get_champion_data(champion)
-    champions = scraper.get_all_champions()
+
+    # champion = "Samira"
+    # data = scraper.get_champion_data(champion)
+
+    champions = scraper.get_champions_names()
     failed = []
     champions_data = {}
+    # champions = ["Lulu", "Kled", "Samira", "Smolder"]
     for champion in tqdm.tqdm(champions):
         try:
             data = scraper.get_champion_data(champion)
