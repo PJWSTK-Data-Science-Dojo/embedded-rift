@@ -122,9 +122,12 @@ class GameInput:
     red_champions: List[int]
     items_per_frame: List[List[int]]
     game_duration: int
-    early_surrender: bool = False
-    surrender: bool = False
-    blue_win: bool = False
+    early_surrender: bool
+    surrender: bool
+    blue_win: bool
+    platform: str
+    season: str
+    patch: str
 
 
 def xsqrtx(x: float, game_duration: float) -> float:
@@ -312,6 +315,10 @@ def extract_game_data(game_data: Dict[str, Any]) -> Dict[str, Any]:
     Extracts timeline frames from the game_data and converts each frame into a FrameInput.
     """
     game_id = game_data["metadata"]["matchId"]
+    platform = game_data["metadata"]["platform"]
+    season = game_data["metadata"]["season"]
+    patch = game_data["metadata"]["patch"]
+
     timeline = game_data["timeline"]
     frame_sequence: List[FrameInput] = []
     result = game_data.get("result", {})
@@ -400,6 +407,9 @@ def extract_game_data(game_data: Dict[str, Any]) -> Dict[str, Any]:
         early_surrender=early_surrender,
         surrender=surrender,
         blue_win=blue_result.get("win", False),
+        platform=platform,
+        season=season,
+        patch=patch,
     )
     return asdict(game_input)
 

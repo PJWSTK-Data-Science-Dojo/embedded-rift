@@ -41,6 +41,9 @@ def write_game_metadata_to_hdf5(game_input: Dict[str, Any], hf: h5py.File) -> No
     early_surrender = int(game_input["early_surrender"])
     surrender = int(game_input["surrender"])
     blue_win = int(game_input["blue_win"])
+    platform = game_input["platform"]
+    season = game_input["season"]
+    patch = game_input["patch"]
 
     metadata_group = hf[collection]
 
@@ -50,6 +53,9 @@ def write_game_metadata_to_hdf5(game_input: Dict[str, Any], hf: h5py.File) -> No
         data=[game_duration, early_surrender, surrender, blue_win],
         dtype=np.int32,
     )
+    ds.attrs["platform"] = platform
+    ds.attrs["season"] = season
+    ds.attrs["patch"] = patch
     # print(f"Stored metadata for game {game_id}")
 
 
@@ -60,6 +66,9 @@ def write_frames_to_hdf5(game_input: Dict[str, Any], hf: h5py.File) -> None:
     collection = "frames"
     game_id = game_input["game_id"]
     frames = game_input["frames"]
+    platform = game_input["platform"]
+    season = game_input["season"]
+    patch = game_input["patch"]
 
     first_frame = frames[0]
     keys_order = list(first_frame.keys())
@@ -81,6 +90,9 @@ def write_frames_to_hdf5(game_input: Dict[str, Any], hf: h5py.File) -> None:
     ds.attrs["early_surrender"] = int(game_input["early_surrender"])
     ds.attrs["surrender"] = int(game_input["surrender"])
     ds.attrs["blue_win"] = int(game_input["blue_win"])
+    ds.attrs["platform"] = platform
+    ds.attrs["season"] = season
+    ds.attrs["patch"] = patch
 
 
 def write_items_to_hdf5(game_input: Dict[str, Any], hf: h5py.File) -> None:
