@@ -27,6 +27,7 @@ def write_champions_to_hdf5(game_input: Dict[str, Any], hf: h5py.File) -> None:
         game_id,
         data=[blue_champions, red_champions],
         dtype=np.int32,
+        compression="gzip",
     )
     # print(f"Stored champions for game {game_id}")
 
@@ -52,6 +53,7 @@ def write_game_metadata_to_hdf5(game_input: Dict[str, Any], hf: h5py.File) -> No
         game_id,
         data=[game_duration, early_surrender, surrender, blue_win],
         dtype=np.int32,
+        compression="gzip",
     )
     ds.attrs["platform"] = platform
     ds.attrs["season"] = season
@@ -105,9 +107,7 @@ def write_items_to_hdf5(game_input: Dict[str, Any], hf: h5py.File) -> None:
     items_group = hf[collection]
 
     ds = items_group.create_dataset(
-        game_id,
-        data=items_per_frame,
-        dtype=np.int32,
+        game_id, data=items_per_frame, dtype=np.int32, compression="gzip"
     )
 
 
