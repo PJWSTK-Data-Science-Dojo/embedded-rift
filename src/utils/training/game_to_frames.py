@@ -155,7 +155,7 @@ def logarithmic(x: float, game_duration: float) -> float:
 
 
 def linear(x: float, game_duration: float, b: float = 0) -> float:
-    return (x - b) / (game_duration - b)
+    return max((x - b) / (game_duration - b), 0)
 
 
 def extract_player(
