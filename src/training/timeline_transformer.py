@@ -187,7 +187,10 @@ class MultiTaskTransformer(nn.Module):
             next_frame_pred = None
 
         # 2. Masked Value Prediction:
-        masked_value_pred = self.masked_pred_head(seq_output)
+        if self.use_eos_token:
+            masked_value_pred = self.masked_pred_head(seq_output[:, :-1, :])
+        else:
+            masked_value_pred = self.masked_pred_head(seq_output)
 
         # 3. Outcome Prediction:
         if self.use_cls_token:
