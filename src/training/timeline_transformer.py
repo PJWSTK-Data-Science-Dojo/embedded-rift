@@ -197,6 +197,9 @@ class MultiTaskTransformer(nn.Module):
             cls_rep = x_encoded[:, 0, :]  # (batch, d_model)
         else:
             cls_rep = x_encoded[:, -1, :]  # (batch, d_model)
+            if x_encoded.shape[1] >= 15:
+                cls_rep = x_encoded[:, 15, :]
+                
         outcome_logits = self.classifier(cls_rep).squeeze(-1)
 
         # fmt: on
@@ -228,7 +231,7 @@ def compute_combined_loss(
 
     # 2. Masked Value Prediction Loss
     mask = sample["mask_values"]  # (batch, seq_len, feature_dim) bool
-    if use_masked_values and mask.sum() > 0:
+    if mask.sum() > 0:
         pred_masked = masked_value_pred[mask]
         target_masked = frames[mask]
         loss_masked = mse_loss(pred_masked, target_masked)
@@ -411,18 +414,21 @@ def parse_args():
         "--hdf5-file", type=str, default="games_data.h5", help="Path to HDF5 dataset."
     )
     parser.add_argument(
+        "-ln",
         "--lambda-next",
         type=float,
         default=1.0,
         help="Weight for next frame prediction loss.",
     )
     parser.add_argument(
+        "-lm",
         "--lambda-masked",
         type=float,
         default=1.0,
         help="Weight for masked value prediction loss.",
     )
     parser.add_argument(
+        "-lo",
         "--lambda-outcome",
         type=float,
         default=1.0,
@@ -430,7 +436,7 @@ def parse_args():
     )
 
     parser.add_argument(
-        "-l",
+        "-log",
         "--logdir",
         type=str,
         default="runs/timeline_transformer",
@@ -443,10 +449,19 @@ def parse_args():
 
     parser.add_argument(
         "-m",
-        "--use-masked-values",
-        action="store_true",
-        help="Use MaskValuesTransform in the dataset.",
+        "--masking",
+        type=float,
+        default=0.0,
+        help="Probability of masking values in frames.",
     )
+
+    parser.add_argument(
+        "-cls",
+        "--use-cls-token",
+        action="store_true",
+        help="Use CLS token in the model.",
+    )
+
     return parser.parse_args()
 
 
@@ -459,10 +474,11 @@ def main():
     lambda_outcome = args.lambda_outcome
     patience = args.patience
     log_dir = args.logdir
-
+    use_cls_token = args.use_cls_token
+    masking = args.masking
     transform = MultitaskTransform(
         NextFramePredictionTransform(),
-        MaskValuesTransform(),
+        MaskValuesTransform(mask_val_prob=masking),
         MaskFramesTransform(),
         OutcomePredictionTransform(),
     )
@@ -504,7 +520,7 @@ def main():
         num_layers=4,
         num_heads=8,
         dropout=0.1,
-        use_cls_token=True,
+        use_cls_token=use_cls_token,
         use_eos_token=True,
         num_champions=200,
         num_items=256,
@@ -533,10 +549,7 @@ def main():
 
         pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}")
         for batch in pbar:
-            if args.use_masked_values:
-                frames = batch["frames_masked_values"].to(device)
-            else:
-                frames = batch["frames"].to(device)
+            frames = batch["frames_masked_values"].to(device)
 
             champions = batch["champions"].to(device)
             items = batch["items"].to(device)
@@ -566,7 +579,6 @@ def main():
                     lambda_next=lambda_next,
                     lambda_masked=lambda_masked,
                     lambda_outcome=lambda_outcome,
-                    use_masked_values=args.use_masked_values,
                 )
             )
             total_loss_batch.backward()
