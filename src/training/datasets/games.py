@@ -6,6 +6,7 @@ from torch.utils.data import Dataset
 from dotenv import load_dotenv
 from tqdm import tqdm
 from utils.champion import CHAMP_ID_TO_INDEX, CHAMPION_IDS
+from utils.items import ITEM_ID_TO_INDEX, ITEM_IDS
 
 
 class GamesDataset(Dataset):
@@ -39,10 +40,16 @@ class GamesDataset(Dataset):
         )
         print("Global normalization parameters computed.")
 
-    def compute_global_norm_params(self, min_duration_sec: int):
+    def compute_global_norm_params(
+        self, min_duration_sec: int, sample_fraction: float = 0.1
+    ):
         """
         Computes global normalization parameters (mean and std) for each feature column
-        based on the last frame of each game with duration >= min_duration_sec.
+        based on the last frame of a random sample of games with duration >= min_duration_sec.
+
+        Args:
+            min_duration_sec: Minimum game duration (in seconds) to be considered.
+            sample_fraction: Fraction of games to sample for normalization computation.
 
         Returns:
             norm_means, norm_stds: 1D NumPy arrays of shape (feature_dim,)
@@ -50,8 +57,17 @@ class GamesDataset(Dataset):
         rep_frames = []
         with h5py.File(self.hdf5_filename, "r") as hf:
             frames_group = hf["frames"]
+            # Get all game IDs.
+            all_game_ids = list(frames_group.keys())
+            # Shuffle and sample a fraction.
+            import random
 
-            for game_id in tqdm(frames_group, desc="Processing games for norm params"):
+            sample_size = max(1, int(len(all_game_ids) * sample_fraction))
+            sampled_game_ids = random.sample(all_game_ids, sample_size)
+
+            for game_id in tqdm(
+                sampled_game_ids, desc="Processing games for norm params"
+            ):
                 ds = frames_group[game_id]
                 game_duration = ds.attrs.get("game_duration", 0)
                 if game_duration < min_duration_sec:
@@ -59,7 +75,7 @@ class GamesDataset(Dataset):
                 frames = ds[:]  # shape: (num_frames, feature_dim)
                 if frames.shape[0] == 0:
                     continue
-                rep_frame = frames[-1, :]  # use the last frame as representative
+                rep_frame = frames[-1, :]  # use the last frame as representative.
                 rep_frames.append(rep_frame)
 
         if not rep_frames:
@@ -100,8 +116,13 @@ class GamesDataset(Dataset):
                 ],
                 dtype=np.int32,
             )
+
             # Load items from the 'items_per_frame' group.
             items = hf["items_per_frame"][game_id][:]
+            items = np.array(
+                [[ITEM_ID_TO_INDEX[item] for item in frame] for frame in items],
+                dtype=np.int32,
+            )
 
         # Normalize all features in the frame data.
         normalized_frames = frames.copy().astype(np.float32)
@@ -136,7 +157,7 @@ if __name__ == "__main__":
     print("Game ID:", sample_game["game_id"])
     print("Frames shape:", sample_game["frames"].shape)
     print("Champions:", sample_game["champions"])
-    print("Items shape:", sample_game["items"].shape)
+    print("Items shape:", sample_game["items"][1, :10])
     print("Game duration:", sample_game["game_duration"])
     print("Global norm means (first 10 features):", sample_game["norm_means"][:10])
     print("Global norm stds (first 10 features):", sample_game["norm_stds"][:10])
