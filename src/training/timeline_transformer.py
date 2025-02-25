@@ -270,19 +270,20 @@ def evaluate(
 
     with torch.no_grad():
         for batch in dataloader:
-            frames = batch["frames"].to(device)
+            frames = batch["frames_masked_values"].to(device)
+            # frames = batch["frames"].to(device)
             champions = batch["champions"].to(device)
             items = batch["items"].to(device)
 
-            if "mask_values" not in batch:
-                batch["mask_values"] = torch.zeros_like(frames, dtype=torch.bool).to(
-                    device
-                )
-            if "outcome" not in batch:
-                outcome_list = [1.0 if flag else 0.0 for flag in batch["blue_win"]]
-                batch["outcome"] = torch.tensor(outcome_list, dtype=torch.float32).to(
-                    device
-                )
+            # if "mask_values" not in batch:
+            #     batch["mask_values"] = torch.zeros_like(frames, dtype=torch.bool).to(
+            #         device
+            #     )
+            # if "outcome" not in batch:
+            #     outcome_list = [1.0 if flag else 0.0 for flag in batch["blue_win"]]
+            #     batch["outcome"] = torch.tensor(outcome_list, dtype=torch.float32).to(
+            #         device
+            #     )
 
             next_frame_pred, masked_value_pred, outcome_logits = model(
                 frames, champions, items
