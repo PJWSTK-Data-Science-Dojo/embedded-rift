@@ -554,6 +554,7 @@ def main():
                     lambda_next=lambda_next,
                     lambda_masked=lambda_masked,
                     lambda_outcome=lambda_outcome,
+                    use_masked_values=args.use_masked_values,
                 )
             )
             total_loss_batch.backward()
