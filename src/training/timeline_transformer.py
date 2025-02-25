@@ -233,7 +233,7 @@ def compute_combined_loss(
         loss_masked = 0.0
 
     # 3. Outcome Prediction Loss
-    target_outcome = sample["outcome"]
+    target_outcome = sample["outcome"].to(outcome_logits.device)
     loss_outcome = bce_loss(outcome_logits, target_outcome)
 
     total_loss = (
