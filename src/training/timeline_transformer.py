@@ -351,7 +351,6 @@ def main():
     # Get dimensions from one sample.
     sample_game = full_dataset[0]
     feature_dim = sample_game["frames"].shape[-1]
-    champion_const = True  # adjust based on your data.
     item_slots = sample_game["items"].shape[-1]
 
     # Instantiate the model.
@@ -437,7 +436,9 @@ def main():
         )
 
         # Save checkpoint.
-        torch.save(model.state_dict(), f"checkpoint_epoch_{epoch+1}.pth")
+        torch.save(
+            model.state_dict(), f"training_checkpoints/checkpoint_epoch_{epoch+1}.pth"
+        )
         print(f"Checkpoint saved for epoch {epoch+1}.")
 
     # After training, evaluate on test set.
