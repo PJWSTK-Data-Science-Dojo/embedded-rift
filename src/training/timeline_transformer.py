@@ -339,10 +339,6 @@ def evaluate(
 
 
 def custom_collate_fn(batch):
-    """
-    Expects each element in batch to be a dict with keys: "frames", "champions", "items", etc.
-    Pads sequences (e.g., frames and items) to the maximum length in the batch.
-    """
     # Process frames (assumed shape: (seq_len, feature_dim))
     frames_list = [torch.tensor(item["frames"], dtype=torch.float32) for item in batch]
     padded_frames = pad_sequence(
@@ -355,21 +351,32 @@ def custom_collate_fn(batch):
         items_list, batch_first=True, padding_value=0
     )  # (batch, max_seq_len, item_slots)
 
-    # For champions: if they are constant per game (shape: (n_champions,)),
-    # we can simply stack them if they are the same size.
+    # Process champions (assumed shape: (n_champions,))
     champions_list = [
         torch.tensor(item["champions"], dtype=torch.long) for item in batch
     ]
     champions_tensor = torch.stack(champions_list)  # (batch, n_champions)
 
-    # Process additional keys if needed.
     collated = {
         "frames": padded_frames,
         "items": padded_items,
         "champions": champions_tensor,
     }
 
-    # Optionally handle other keys (e.g., "mask_values", "blue_win", "outcome").
+    # Handle frames_masked_values if available.
+    if "frames_masked_values" in batch[0]:
+        masked_frames_list = [
+            (
+                torch.tensor(item["frames_masked_values"], dtype=torch.float32)
+                if not torch.is_tensor(item["frames_masked_values"])
+                else item["frames_masked_values"]
+            )
+            for item in batch
+        ]
+        padded_masked_frames = pad_sequence(masked_frames_list, batch_first=True)
+        collated["frames_masked_values"] = padded_masked_frames
+
+    # Optionally process other keys.
     for key in batch[0]:
         if key not in collated:
             try:
