@@ -376,7 +376,7 @@ def main():
     # Learning rate scheduler: step down every 3 epochs with gamma factor.
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.5)
 
-    writer = SummaryWriter(log_dir="runs/experiment_name")
+    writer = SummaryWriter(log_dir="runs/timeline_transformer")
 
     num_epochs = 50
 
