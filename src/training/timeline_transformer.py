@@ -7,6 +7,7 @@ from training.datasets.games import GamesDataset
 from torch.nn.utils.rnn import pad_sequence
 from tqdm import tqdm
 import torch.nn.functional as F
+from torch.utils.tensorboard import SummaryWriter
 
 mse_loss = nn.MSELoss()
 bce_loss = nn.BCEWithLogitsLoss()
@@ -375,15 +376,19 @@ def main():
     # Learning rate scheduler: step down every 3 epochs with gamma factor.
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.5)
 
-    num_epochs = 10
+    writer = SummaryWriter(log_dir="runs/experiment_name")
+
+    num_epochs = 50
 
     for epoch in range(num_epochs):
         model.train()
         epoch_loss = 0.0
+        epoch_next_loss = 0.0
+        epoch_masked_loss = 0.0
+        epoch_outcome_loss = 0.0
         correct_outcomes = 0
         total_outcomes = 0
 
-        # Use tqdm to monitor training progress.
         pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}")
         for batch in pbar:
             frames = batch["frames"].to(device)
@@ -413,6 +418,19 @@ def main():
             optimizer.step()
 
             epoch_loss += total_loss_batch.item()
+            epoch_next_loss += (
+                loss_next.item() if isinstance(loss_next, torch.Tensor) else loss_next
+            )
+            epoch_masked_loss += (
+                loss_masked.item()
+                if isinstance(loss_masked, torch.Tensor)
+                else loss_masked
+            )
+            epoch_outcome_loss += (
+                loss_outcome.item()
+                if isinstance(loss_outcome, torch.Tensor)
+                else loss_outcome
+            )
 
             # Outcome Accuracy: apply sigmoid and threshold at 0.5.
             predicted = (torch.sigmoid(outcome_logits) >= 0.5).float()
@@ -424,16 +442,35 @@ def main():
         scheduler.step()  # Update learning rate.
 
         avg_train_loss = epoch_loss / len(train_loader)
+        avg_next_loss = epoch_next_loss / len(train_loader)
+        avg_masked_loss = epoch_masked_loss / len(train_loader)
+        avg_outcome_loss = epoch_outcome_loss / len(train_loader)
         train_accuracy = correct_outcomes / total_outcomes
+        current_lr = optimizer.param_groups[0]["lr"]
 
         # Evaluate on validation set.
         val_loss, val_next, val_masked, val_outcome = evaluate(
             model, val_loader, device
         )
+
         print(
-            f"Epoch {epoch+1}: Train Loss = {avg_train_loss:.4f}, Train Outcome Acc = {train_accuracy:.4f}, "
-            f"Val Loss = {val_loss:.4f}"
+            f"Epoch {epoch+1}: Train Loss = {avg_train_loss:.4f}, "
+            + f"Train Outcome Acc = {train_accuracy:.4f}, Val Loss = {val_loss:.4f}"
         )
+
+        # Log training metrics.
+        writer.add_scalar("Loss/Train_Total", avg_train_loss, epoch)
+        writer.add_scalar("Loss/Train_Next", avg_next_loss, epoch)
+        writer.add_scalar("Loss/Train_Masked", avg_masked_loss, epoch)
+        writer.add_scalar("Loss/Train_Outcome", avg_outcome_loss, epoch)
+        writer.add_scalar("Accuracy/Train_Outcome", train_accuracy, epoch)
+        writer.add_scalar("LearningRate", current_lr, epoch)
+
+        # Log validation metrics.
+        writer.add_scalar("Loss/Val_Total", val_loss, epoch)
+        writer.add_scalar("Loss/Val_Next", val_next, epoch)
+        writer.add_scalar("Loss/Val_Masked", val_masked, epoch)
+        writer.add_scalar("Loss/Val_Outcome", val_outcome, epoch)
 
         # Save checkpoint.
         torch.save(
@@ -449,6 +486,9 @@ def main():
         f"Test Loss: {test_loss:.4f} (Next: {test_next:.4f}, Masked: {test_masked:.4f}, Outcome: {test_outcome:.4f})"
     )
     print("Training completed.")
+
+    writer.flush()
+    writer.close()
 
 
 if __name__ == "__main__":
