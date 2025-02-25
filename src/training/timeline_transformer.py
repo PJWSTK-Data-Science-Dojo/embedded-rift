@@ -233,7 +233,7 @@ def compute_combined_loss(
         loss_masked = 0.0
 
     # 3. Outcome Prediction Loss
-    target_outcome = sample["outcome"]  # shape: (batch,)
+    target_outcome = sample["outcome"]
     loss_outcome = bce_loss(outcome_logits, target_outcome)
 
     total_loss = (
@@ -529,16 +529,16 @@ def main():
 
             champions = batch["champions"].to(device)
             items = batch["items"].to(device)
-
+            outcome = batch["outcome"].to(device)
             # if "mask_values" not in batch:
             #     batch["mask_values"] = torch.zeros_like(frames, dtype=torch.bool).to(
             #         device
             #     )
-            if "outcome" not in batch:
-                outcome_list = [1.0 if flag else 0.0 for flag in batch["blue_win"]]
-                batch["outcome"] = torch.tensor(outcome_list, dtype=torch.float32).to(
-                    device
-                )
+            # if "outcome" not in batch:
+            #     outcome_list = [1.0 if flag else 0.0 for flag in batch["blue_win"]]
+            #     batch["outcome"] = torch.tensor(outcome_list, dtype=torch.float32).to(
+            #         device
+            #     )
 
             optimizer.zero_grad()
             next_frame_pred, masked_value_pred, outcome_logits = model(
