@@ -376,6 +376,14 @@ def custom_collate_fn(batch):
         padded_masked_frames = pad_sequence(masked_frames_list, batch_first=True)
         collated["frames_masked_values"] = padded_masked_frames
 
+    if "mask_values" in batch[0]:
+        mask_list = [
+            torch.as_tensor(item["mask_values"], dtype=torch.bool) for item in batch
+        ]
+        # If masks have the same shape as frames, you can pad similarly:
+        padded_masks = pad_sequence(mask_list, batch_first=True, padding_value=False)
+        collated["mask_values"] = padded_masks
+
     # Optionally process other keys.
     for key in batch[0]:
         if key not in collated:
@@ -530,6 +538,7 @@ def main():
             champions = batch["champions"].to(device)
             items = batch["items"].to(device)
             outcome = batch["outcome"].to(device)
+
             # if "mask_values" not in batch:
             #     batch["mask_values"] = torch.zeros_like(frames, dtype=torch.bool).to(
             #         device
