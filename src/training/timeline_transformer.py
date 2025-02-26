@@ -202,7 +202,7 @@ def compute_combined_loss(
 
 def custom_collate_fn(batch):
     # Pad frames.
-    frames_list = [torch.tensor(item["frames"], dtype=torch.float32) for item in batch]
+    frames_list = [item["frames"].clone().detach().float() for item in batch]
     padded_frames = pad_sequence(frames_list, batch_first=True)
     # Pad items.
     items_list = [torch.tensor(item["items"], dtype=torch.long) for item in batch]
@@ -234,7 +234,7 @@ def custom_collate_fn(batch):
     for key in ["outcome", "blue_win"]:
         if key in batch[0]:
             try:
-                collated[key] = torch.stack([torch.tensor(item[key]) for item in batch])
+                collated[key] = torch.stack([item[key].clone().detach() for item in batch])
             except Exception:
                 collated[key] = [item[key] for item in batch]
     return collated
