@@ -91,9 +91,7 @@ class MultiTaskTransformer(nn.Module):
             self.eos_token = nn.Parameter(torch.randn(1, 1, d_model))
 
         self.pos_encoder = PositionalEncoding(d_model, dropout=dropout, max_len=70)
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=d_model, nhead=num_heads, dropout=dropout
-        )
+        encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=num_heads, dropout=dropout, batch_first=True)
         self.transformer_encoder = nn.TransformerEncoder(
             encoder_layer, num_layers=num_layers
         )
@@ -148,9 +146,7 @@ class MultiTaskTransformer(nn.Module):
 
         # Add positional encoding.
         x_embed = self.pos_encoder(x_embed)
-        x_embed = x_embed.transpose(0, 1)  # (seq_len, batch, d_model)
         x_encoded = self.transformer_encoder(x_embed)
-        x_encoded = x_encoded.transpose(0, 1)  # (batch, seq_len(+tokens), d_model)
 
         # Remove the CLS token for frame-level predictions.
         seq_output = x_encoded[:, 1:, :] if self.use_cls_token else x_encoded
@@ -271,14 +267,17 @@ def train_one_epoch(model, dataloader, optimizer, device, lambda_next, lambda_ou
     correct_outcomes = 0
     total_samples = 0
 
-    for batch in tqdm(dataloader, desc="Training"):
+    pbar = tqdm(dataloader, desc="Training")
+    for batch in pbar:
         frames = batch["frames_masked"].to(device)
         champions = batch["champions"].to(device)
         items = batch["items"].to(device)
         outcome = batch["outcome"].to(device)
         optimizer.zero_grad()
         next_frame_pred, outcome_logits = model(frames, champions, items)
-        loss, loss_next, loss_outcome = compute_combined_loss(frames, next_frame_pred, outcome_logits, batch, lambda_next, lambda_outcome)
+        loss, loss_next, loss_outcome = compute_combined_loss(
+            frames, next_frame_pred, outcome_logits, batch, lambda_next, lambda_outcome
+        )
         loss.backward()
         optimizer.step()
 
@@ -289,14 +288,20 @@ def train_one_epoch(model, dataloader, optimizer, device, lambda_next, lambda_ou
         predicted = (torch.sigmoid(outcome_logits) >= 0.5).float()
         correct_outcomes += (predicted.cpu() == outcome.cpu()).sum().item()
         total_samples += outcome.size(0)
+
+        pbar.set_postfix({
+            "loss": f"{loss.item():.4f}",
+            "next_loss": f"{loss_next.item() if isinstance(loss_next, torch.Tensor) else loss_next:.4f}",
+            "outcome_loss": f"{loss_outcome.item() if isinstance(loss_outcome, torch.Tensor) else loss_outcome:.4f}"
+        })
     avg_loss = total_loss / len(dataloader)
     avg_next_loss = total_next_loss / len(dataloader)
     avg_outcome_loss = total_outcome_loss / len(dataloader)
     acc = correct_outcomes / total_samples
     return avg_loss, avg_next_loss, avg_outcome_loss, acc
 
+
 def evaluate_model(model, dataloader, device, lambda_next, lambda_outcome):
-    
     model.eval()
     total_loss = 0.0
     total_next_loss = 0.0
@@ -306,15 +311,18 @@ def evaluate_model(model, dataloader, device, lambda_next, lambda_outcome):
     all_preds = []
     all_targets = []
 
+    pbar = tqdm(dataloader, desc="Evaluation")
     with torch.no_grad():
-        for batch in tqdm(dataloader, desc="Evaluation"):
+        for batch in pbar:
             frames = batch["frames_masked"].to(device)
             champions = batch["champions"].to(device)
             items = batch["items"].to(device)
             outcome = batch["outcome"].to(device)
 
             next_frame_pred, outcome_logits = model(frames, champions, items)
-            loss, loss_next, loss_outcome = compute_combined_loss(frames, next_frame_pred, outcome_logits, batch, lambda_next, lambda_outcome)
+            loss, loss_next, loss_outcome = compute_combined_loss(
+                frames, next_frame_pred, outcome_logits, batch, lambda_next, lambda_outcome
+            )
             total_loss += loss.item()
             total_next_loss += loss_next.item() if isinstance(loss_next, torch.Tensor) else loss_next
             total_outcome_loss += loss_outcome.item() if isinstance(loss_outcome, torch.Tensor) else loss_outcome
@@ -324,6 +332,12 @@ def evaluate_model(model, dataloader, device, lambda_next, lambda_outcome):
             targets = outcome.cpu().numpy()
             all_preds.append(preds)
             all_targets.append(targets)
+
+            pbar.set_postfix({
+                "loss": f"{loss.item():.4f}",
+                "next_loss": f"{loss_next.item() if isinstance(loss_next, torch.Tensor) else loss_next:.4f}",
+                "outcome_loss": f"{loss_outcome.item() if isinstance(loss_outcome, torch.Tensor) else loss_outcome:.4f}"
+            })
 
     avg_loss = total_loss / count if count > 0 else 0
     avg_next_loss = total_next_loss / count if count > 0 else 0
@@ -337,6 +351,7 @@ def evaluate_model(model, dataloader, device, lambda_next, lambda_outcome):
         auc = 0.0
 
     return avg_loss, avg_next_loss, avg_outcome_loss, auc
+
 
 
 #########################################
