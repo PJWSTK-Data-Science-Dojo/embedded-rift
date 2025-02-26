@@ -2,7 +2,7 @@ import math
 import torch
 import torch.nn as nn
 from dotenv import load_dotenv
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, random_split
 from training.datasets.games import GamesDataset
 from torch.nn.utils.rnn import pad_sequence
 from tqdm import tqdm
@@ -19,6 +19,7 @@ from training.transforms.multitask_transform import (
     NextFramePredictionTransform,
 )
 
+# fmt: off
 
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, dropout=0.1, max_len=500):
@@ -98,12 +99,11 @@ class MultiTaskTransformer(nn.Module):
         )
 
         # Projection layers:
-        # For champions: flatten the per-game champion embeddings (n_champions_in_game * champions_model) to d_model.
         self.champion_proj = nn.Linear(n_champions_in_game * champions_model, d_model)
-        # For items: group items by 6 -> num_groups = item_slots // 6, then flatten to (num_groups * items_model) -> d_model.
+
         num_groups = item_slots // 6  # should be 10 if item_slots is 60.
         self.item_proj = nn.Linear(num_groups * items_model, d_model)
-        # After concatenating continuous, champion, and item representations (3*d_model) project back to d_model.
+
         self.comb_proj = nn.Linear(3 * d_model, d_model)
 
         # Task-specific heads:
@@ -168,157 +168,56 @@ class MultiTaskTransformer(nn.Module):
         else:
             cls_rep = x_encoded[:, 0, :]
         outcome_logits = self.classifier(cls_rep).squeeze(-1)
-        # fmt: on
+
         return next_frame_pred, outcome_logits
 
 
-def compute_combined_loss(
-    frames,
-    next_frame_pred,
-    outcome_logits,
-    sample,
-    lambda_next=1.0,
-    lambda_outcome=1.0,
-):
-    mse_loss = F.mse_loss
-    bce_loss = F.binary_cross_entropy_with_logits
+#########################################
+# Loss Functions
+#########################################
 
-    # 1. Next Frame Prediction Loss
+
+def compute_combined_loss(
+    frames, next_frame_pred, outcome_logits, sample, lambda_next=1.0, lambda_outcome=1.0
+):
+    # Next Frame Prediction Loss.
     if next_frame_pred is not None:
         target_next_frames = frames[:, 1:, :]
-        loss_next = mse_loss(next_frame_pred, target_next_frames)
+        loss_next = F.mse_loss(next_frame_pred, target_next_frames)
     else:
         loss_next = 0.0
 
-    # 2. Outcome Prediction Loss
+    # Outcome Prediction Loss.
     target_outcome = sample["outcome"].to(outcome_logits.device)
-    loss_outcome = bce_loss(outcome_logits, target_outcome)
+    loss_outcome = F.binary_cross_entropy_with_logits(outcome_logits, target_outcome)
 
     total_loss = lambda_next * loss_next + lambda_outcome * loss_outcome
-
     return total_loss, loss_next, loss_outcome
 
 
-def evaluate(
-    model, dataloader, device, lambda_next=1.0, lambda_masked=1.0, lambda_outcome=1.0
-):
-    model.eval()
-    total_loss = 0.0
-    total_next_loss = 0.0
-    total_masked_loss = 0.0
-    total_outcome_loss = 0.0
-    count = 0
-
-    all_outcome_preds = []
-    all_outcome_targets = []
-
-    # Optional: track next-frame accuracy if your next_frame_pred is discrete
-    # next_frame_correct = 0
-    # total_frames = 0
-
-    with torch.no_grad():
-        for batch in dataloader:
-            frames = batch["frames_masked"].to(device)
-            # frames = batch["frames"].to(device)
-            champions = batch["champions"].to(device)
-            items = batch["items"].to(device)
-
-            # if "mask_values" not in batch:
-            #     batch["mask_values"] = torch.zeros_like(frames, dtype=torch.bool).to(
-            #         device
-            #     )
-            # if "outcome" not in batch:
-            #     outcome_list = [1.0 if flag else 0.0 for flag in batch["blue_win"]]
-            #     batch["outcome"] = torch.tensor(outcome_list, dtype=torch.float32).to(
-            #         device
-            #     )
-
-            next_frame_pred, masked_value_pred, outcome_logits = model(
-                frames, champions, items
-            )
-
-            # Compute losses
-            loss, loss_next, loss_masked, loss_outcome = compute_combined_loss(
-                frames,
-                next_frame_pred,
-                masked_value_pred,
-                outcome_logits,
-                batch,
-                lambda_next=lambda_next,
-                lambda_masked=lambda_masked,
-                lambda_outcome=lambda_outcome,
-            )
-
-            total_loss += loss.item()
-            total_next_loss += (
-                loss_next.item() if isinstance(loss_next, torch.Tensor) else loss_next
-            )
-            total_masked_loss += (
-                loss_masked.item()
-                if isinstance(loss_masked, torch.Tensor)
-                else loss_masked
-            )
-            total_outcome_loss += (
-                loss_outcome.item()
-                if isinstance(loss_outcome, torch.Tensor)
-                else loss_outcome
-            )
-            count += 1
-
-            # Gather predictions for AUC
-            preds = torch.sigmoid(outcome_logits).cpu().numpy()
-            targets = batch["outcome"].cpu().numpy()
-            all_outcome_preds.append(preds)
-            all_outcome_targets.append(targets)
-
-            # If next-frame is discrete, compute accuracy here (optional)
-            # if next_frame_pred is not None:
-            #     # Some logic to compare predicted vs. ground truth frames
-            #     pass
-
-    avg_loss = total_loss / count if count > 0 else 0
-    avg_next = total_next_loss / count if count > 0 else 0
-    avg_masked = total_masked_loss / count if count > 0 else 0
-    avg_outcome = total_outcome_loss / count if count > 0 else 0
-
-    # Compute AUC
-    all_outcome_preds = np.concatenate(all_outcome_preds)
-    all_outcome_targets = np.concatenate(all_outcome_targets)
-    # If there's at least one positive and one negative sample, compute AUC
-    if len(np.unique(all_outcome_targets)) > 1:
-        auc = roc_auc_score(all_outcome_targets, all_outcome_preds)
-    else:
-        auc = 0.0  # Or handle the edge case differently
-
-    return avg_loss, avg_next, avg_masked, avg_outcome, auc
+#########################################
+# DataLoader and Collate
+#########################################
 
 
 def custom_collate_fn(batch):
-    # Process frames (assumed shape: (seq_len, feature_dim))
+    # Pad frames.
     frames_list = [torch.tensor(item["frames"], dtype=torch.float32) for item in batch]
-    padded_frames = pad_sequence(
-        frames_list, batch_first=True
-    )  # (batch, max_seq_len, feature_dim)
-
-    # Process items (assumed shape: (seq_len, item_slots))
+    padded_frames = pad_sequence(frames_list, batch_first=True)
+    # Pad items.
     items_list = [torch.tensor(item["items"], dtype=torch.long) for item in batch]
-    padded_items = pad_sequence(
-        items_list, batch_first=True, padding_value=0
-    )  # (batch, max_seq_len, item_slots)
-
-    # Process champions (assumed shape: (n_champions,))
+    padded_items = pad_sequence(items_list, batch_first=True, padding_value=0)
+    # Stack champions (assumed fixed size per sample).
     champions_list = [
         torch.tensor(item["champions"], dtype=torch.long) for item in batch
     ]
-    champions_tensor = torch.stack(champions_list)  # (batch, n_champions)
-
+    champions_tensor = torch.stack(champions_list)
     collated = {
         "frames": padded_frames,
         "items": padded_items,
         "champions": champions_tensor,
     }
-
-    # Handle frames_masked if available.
+    # Optionally include masked frames if available.
     if "frames_masked" in batch[0]:
         masked_frames_list = [
             (
@@ -328,139 +227,158 @@ def custom_collate_fn(batch):
             )
             for item in batch
         ]
-        padded_masked_frames = pad_sequence(masked_frames_list, batch_first=True)
-        collated["frames_masked"] = padded_masked_frames
+        padded_masked = pad_sequence(masked_frames_list, batch_first=True)
+        collated["frames_masked"] = padded_masked
 
-    if "mask_values" in batch[0]:
-        mask_list = [
-            torch.as_tensor(item["mask_values"], dtype=torch.bool) for item in batch
-        ]
-        # If masks have the same shape as frames, you can pad similarly:
-        padded_masks = pad_sequence(mask_list, batch_first=True, padding_value=False)
-        collated["mask_values"] = padded_masks
-
-    # Optionally process other keys.
-    for key in batch[0]:
-        if key not in collated:
+    # Process outcome and blue_win if available.
+    for key in ["outcome", "blue_win"]:
+        if key in batch[0]:
             try:
                 collated[key] = torch.stack([torch.tensor(item[key]) for item in batch])
             except Exception:
                 collated[key] = [item[key] for item in batch]
-
     return collated
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Train MultiTaskTransformer.")
-    parser.add_argument(
-        "-e",
-        "--epochs",
-        type=int,
-        default=20,
-        help="Number of epochs for training.",
-    )
-    parser.add_argument(
-        "--hdf5-file", type=str, default="games_data.h5", help="Path to HDF5 dataset."
-    )
-    parser.add_argument(
-        "-ln",
-        "--lambda-next",
-        type=float,
-        default=1.0,
-        help="Weight for next frame prediction loss.",
-    )
-    parser.add_argument(
-        "-lm",
-        "--lambda-masked",
-        type=float,
-        default=1.0,
-        help="Weight for masked value prediction loss.",
-    )
-    parser.add_argument(
-        "-lo",
-        "--lambda-outcome",
-        type=float,
-        default=1.0,
-        help="Weight for outcome prediction loss.",
-    )
-
-    parser.add_argument(
-        "-log",
-        "--logdir",
-        type=str,
-        default="runs/timeline_transformer",
-        help="Tensorboard log directory.",
-    )
-
-    parser.add_argument(
-        "--patience", type=int, default=5, help="Patience for early stopping."
-    )
-
-    parser.add_argument(
-        "-m",
-        "--masking",
-        type=float,
-        default=0.0,
-        help="Probability of masking values in frames.",
-    )
-
-    parser.add_argument(
-        "-cls",
-        "--use-cls-token",
-        action="store_true",
-        help="Use CLS token in the model.",
-    )
-
-    return parser.parse_args()
-
-
-def main():
-    args = parse_args()  # parse CLI arguments
-
-    hdf5_filename = args.hdf5_file
-    lambda_next = args.lambda_next
-    lambda_masked = args.lambda_masked
-    lambda_outcome = args.lambda_outcome
-    patience = args.patience
-    log_dir = args.logdir
-    use_cls_token = args.use_cls_token
-    masking = args.masking
-    transform = MultitaskTransform(
-        NextFramePredictionTransform(),
-        MaskValuesTransform(),
-        MaskFramesTransform(mask_frame_prob=masking),
-        OutcomePredictionTransform(),
-    )
-
-    # Load dataset, split, create dataloaders...
+def get_dataloaders(hdf5_filename, transform, batch_size=4):
     full_dataset = GamesDataset(hdf5_filename=hdf5_filename, transform=transform)
     total_size = len(full_dataset)
     train_size = int(0.8 * total_size)
     val_size = int(0.1 * total_size)
     test_size = total_size - train_size - val_size
-    train_dataset, val_dataset, test_dataset = torch.utils.data.random_split(
+    train_dataset, val_dataset, test_dataset = random_split(
         full_dataset, [train_size, val_size, test_size]
     )
-
     train_loader = DataLoader(
-        train_dataset, batch_size=4, shuffle=True, collate_fn=custom_collate_fn
+        train_dataset, batch_size=batch_size, shuffle=True, collate_fn=custom_collate_fn
     )
     val_loader = DataLoader(
-        val_dataset, batch_size=4, shuffle=False, collate_fn=custom_collate_fn
+        val_dataset, batch_size=batch_size, shuffle=False, collate_fn=custom_collate_fn
     )
     test_loader = DataLoader(
-        test_dataset, batch_size=4, shuffle=False, collate_fn=custom_collate_fn
+        test_dataset, batch_size=batch_size, shuffle=False, collate_fn=custom_collate_fn
     )
+    return train_loader, val_loader, test_loader, full_dataset
 
+#########################################
+# Training and Evaluation Functions
+#########################################
+def train_one_epoch(model, dataloader, optimizer, device, lambda_next, lambda_outcome):
+    model.train()
+    total_loss = 0.0
+    total_next_loss = 0.0
+    total_outcome_loss = 0.0
+    correct_outcomes = 0
+    total_samples = 0
+
+    for batch in tqdm(dataloader, desc="Training"):
+        frames = batch["frames_masked"].to(device)
+        champions = batch["champions"].to(device)
+        items = batch["items"].to(device)
+        outcome = batch["outcome"].to(device)
+        optimizer.zero_grad()
+        next_frame_pred, outcome_logits = model(frames, champions, items)
+        loss, loss_next, loss_outcome = compute_combined_loss(frames, next_frame_pred, outcome_logits, batch, lambda_next, lambda_outcome)
+        loss.backward()
+        optimizer.step()
+
+        total_loss += loss.item()
+        total_next_loss += loss_next.item() if isinstance(loss_next, torch.Tensor) else loss_next
+        total_outcome_loss += loss_outcome.item() if isinstance(loss_outcome, torch.Tensor) else loss_outcome
+
+        predicted = (torch.sigmoid(outcome_logits) >= 0.5).float()
+        correct_outcomes += (predicted.cpu() == outcome.cpu()).sum().item()
+        total_samples += outcome.size(0)
+    avg_loss = total_loss / len(dataloader)
+    avg_next_loss = total_next_loss / len(dataloader)
+    avg_outcome_loss = total_outcome_loss / len(dataloader)
+    acc = correct_outcomes / total_samples
+    return avg_loss, avg_next_loss, avg_outcome_loss, acc
+
+def evaluate_model(model, dataloader, device, lambda_next, lambda_outcome):
+    
+    model.eval()
+    total_loss = 0.0
+    total_next_loss = 0.0
+    total_outcome_loss = 0.0
+    count = 0
+
+    all_preds = []
+    all_targets = []
+
+    with torch.no_grad():
+        for batch in tqdm(dataloader, desc="Evaluation"):
+            frames = batch["frames_masked"].to(device)
+            champions = batch["champions"].to(device)
+            items = batch["items"].to(device)
+            outcome = batch["outcome"].to(device)
+
+            next_frame_pred, outcome_logits = model(frames, champions, items)
+            loss, loss_next, loss_outcome = compute_combined_loss(frames, next_frame_pred, outcome_logits, batch, lambda_next, lambda_outcome)
+            total_loss += loss.item()
+            total_next_loss += loss_next.item() if isinstance(loss_next, torch.Tensor) else loss_next
+            total_outcome_loss += loss_outcome.item() if isinstance(loss_outcome, torch.Tensor) else loss_outcome
+            count += 1
+
+            preds = torch.sigmoid(outcome_logits).cpu().numpy()
+            targets = outcome.cpu().numpy()
+            all_preds.append(preds)
+            all_targets.append(targets)
+
+    avg_loss = total_loss / count if count > 0 else 0
+    avg_next_loss = total_next_loss / count if count > 0 else 0
+    avg_outcome_loss = total_outcome_loss / count if count > 0 else 0
+
+    all_preds = np.concatenate(all_preds)
+    all_targets = np.concatenate(all_targets)
+    if len(np.unique(all_targets)) > 1:
+        auc = roc_auc_score(all_targets, all_preds)
+    else:
+        auc = 0.0
+
+    return avg_loss, avg_next_loss, avg_outcome_loss, auc
+
+
+#########################################
+# Argument Parsing and Main Function
+#########################################
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Train MultiTaskTransformer.")
+    parser.add_argument("-e", "--epochs", type=int, default=20, help="Number of training epochs.")
+    parser.add_argument("--hdf5-file", type=str, default="games_data.h5", help="Path to HDF5 dataset.")
+    parser.add_argument("-b", "--batch-size", type=int, default=4, help="Batch size for training.")
+    parser.add_argument("-ln", "--lambda-next", type=float, default=1.0, help="Weight for next frame loss.")
+    parser.add_argument("-lo", "--lambda-outcome", type=float, default=1.0, help="Weight for outcome loss.")
+    parser.add_argument("-log", "--logdir", type=str, default="runs/timeline_transformer", help="Tensorboard log directory.")
+    parser.add_argument("--patience", type=int, default=5, help="Patience for early stopping.")
+    parser.add_argument("-m", "--masking", type=float, default=0.0, help="Probability of masking frames.")
+    parser.add_argument("-cls", "--use-cls-token", action="store_true", help="Use CLS token in the model.")
+    return parser.parse_args()
+
+def main():
+    args = parse_args()
+    load_dotenv()
+    
+    # Build transform.
+    transform = MultitaskTransform(
+        NextFramePredictionTransform(),
+        MaskFramesTransform(mask_frame_prob=args.masking),
+        OutcomePredictionTransform(),
+    )
+    
+    # Get dataloaders.
+    train_loader, val_loader, test_loader, full_dataset = get_dataloaders(args.hdf5_file, transform, batch_size=args.batch_size)
+    
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
-
-    # Extract dimensions from a sample.
+    
+    # Extract dimensions.
     sample_game = full_dataset[0]
     feature_dim = sample_game["frames"].shape[-1]
     item_slots = sample_game["items"].shape[-1]
-
-    # Build model, optimizer, scheduler.
+    
+    # Build model.
     model = MultiTaskTransformer(
         feature_dim=feature_dim,
         d_model=256,
@@ -469,7 +387,7 @@ def main():
         num_layers=4,
         num_heads=8,
         dropout=0.1,
-        use_cls_token=use_cls_token,
+        use_cls_token=args.use_cls_token,
         use_eos_token=True,
         num_champions=200,
         num_items=256,
@@ -477,149 +395,57 @@ def main():
         item_slots=item_slots,
     )
     model.to(device)
-
+    
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.5)
-
-    writer = SummaryWriter(log_dir=log_dir)
+    writer = SummaryWriter(log_dir=args.logdir)
+    
     num_epochs = args.epochs
-
     best_val_loss = float("inf")
-    no_improvement_count = 0
+    no_improvement = 0
 
     for epoch in range(num_epochs):
-        model.train()
-        epoch_loss = 0.0
-        epoch_next_loss = 0.0
-        epoch_masked_loss = 0.0
-        epoch_outcome_loss = 0.0
-        correct_outcomes = 0
-        total_outcomes = 0
-
-        pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}")
-        for batch in pbar:
-            frames = batch["frames_masked"].to(device)
-
-            champions = batch["champions"].to(device)
-            items = batch["items"].to(device)
-            outcome = batch["outcome"].to(device)
-
-            # if "mask_values" not in batch:
-            #     batch["mask_values"] = torch.zeros_like(frames, dtype=torch.bool).to(
-            #         device
-            #     )
-            # if "outcome" not in batch:
-            #     outcome_list = [1.0 if flag else 0.0 for flag in batch["blue_win"]]
-            #     batch["outcome"] = torch.tensor(outcome_list, dtype=torch.float32).to(
-            #         device
-            #     )
-
-            optimizer.zero_grad()
-            next_frame_pred, _, outcome_logits = model(frames, champions, items)
-            total_loss_batch, loss_next, loss_outcome = compute_combined_loss(
-                frames,
-                next_frame_pred,
-                outcome_logits,
-                batch,
-                lambda_next=lambda_next,
-                lambda_outcome=lambda_outcome,
-            )
-            total_loss_batch.backward()
-            optimizer.step()
-
-            epoch_loss += total_loss_batch.item()
-            epoch_next_loss += (
-                loss_next.item() if isinstance(loss_next, torch.Tensor) else loss_next
-            )
-
-            epoch_outcome_loss += (
-                loss_outcome.item()
-                if isinstance(loss_outcome, torch.Tensor)
-                else loss_outcome
-            )
-
-            # Outcome Accuracy
-            predicted = (torch.sigmoid(outcome_logits) >= 0.5).float()
-            correct_outcomes += (predicted.cpu() == batch["outcome"].cpu()).sum().item()
-            total_outcomes += batch["outcome"].size(0)
-
-            pbar.set_postfix(loss=total_loss_batch.item())
-
+        train_loss, train_next, train_outcome, train_acc = train_one_epoch(
+            model, train_loader, optimizer, device, args.lambda_next, args.lambda_outcome
+        )
         scheduler.step()
-
-        avg_train_loss = epoch_loss / len(train_loader)
-        avg_next_loss = epoch_next_loss / len(train_loader)
-        avg_masked_loss = epoch_masked_loss / len(train_loader)
-        avg_outcome_loss = epoch_outcome_loss / len(train_loader)
-        train_accuracy = correct_outcomes / total_outcomes
-        current_lr = optimizer.param_groups[0]["lr"]
-
-        # Evaluate on validation set (also returns AUC)
-        val_loss, val_next, val_masked, val_outcome, val_auc = evaluate(
-            model,
-            val_loader,
-            device,
-            lambda_next=lambda_next,
-            lambda_masked=lambda_masked,
-            lambda_outcome=lambda_outcome,
+        
+        writer.add_scalar("Loss/Train_Next", train_next, epoch)
+        writer.add_scalar("Loss/Train_Outcome", train_outcome, epoch)
+        
+        val_loss, val_next, val_outcome, val_auc = evaluate_model(
+            model, val_loader, device, args.lambda_next, args.lambda_outcome
         )
-
-        print(
-            f"Epoch {epoch+1}: Train Loss = {avg_train_loss:.4f}, "
-            f"Train Acc = {train_accuracy:.4f}, Val Loss = {val_loss:.4f}, Val AUC = {val_auc:.4f}"
-        )
-
-        # Log training metrics.
-        writer.add_scalar("Loss/Train_Total", avg_train_loss, epoch)
-        writer.add_scalar("Loss/Train_Next", avg_next_loss, epoch)
-        writer.add_scalar("Loss/Train_Masked", avg_masked_loss, epoch)
-        writer.add_scalar("Loss/Train_Outcome", avg_outcome_loss, epoch)
-        writer.add_scalar("Accuracy/Train_Outcome", train_accuracy, epoch)
-        writer.add_scalar("LearningRate", current_lr, epoch)
-
-        # Log validation metrics.
-        writer.add_scalar("Loss/Val_Total", val_loss, epoch)
+        
+        print(f"Epoch {epoch+1}: Train Loss {train_loss:.4f}, Train Acc {train_acc:.4f} | Val Loss {val_loss:.4f}, Val AUC {val_auc:.4f}")
         writer.add_scalar("Loss/Val_Next", val_next, epoch)
-        writer.add_scalar("Loss/Val_Masked", val_masked, epoch)
         writer.add_scalar("Loss/Val_Outcome", val_outcome, epoch)
-        writer.add_scalar("AUC/Val_Outcome", val_auc, epoch)
-
-        # Early Stopping Check.
+        writer.add_scalar("Loss/Train", train_loss, epoch)
+        writer.add_scalar("Loss/Val", val_loss, epoch)
+        writer.add_scalar("Accuracy/Train", train_acc, epoch)
+        writer.add_scalar("AUC/Val", val_auc, epoch)
+        
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            no_improvement_count = 0
-            # Optionally save the best model here.
+            no_improvement = 0
+            torch.save(model.state_dict(), "best_model.pth")
+            print("Best model saved.")
         else:
-            no_improvement_count += 1
-
-        if no_improvement_count >= patience:
+            no_improvement += 1
+        
+        if no_improvement >= args.patience:
             print("Early stopping triggered.")
             break
-
-        # Save checkpoint each epoch.
-        torch.save(
-            model.state_dict(), f"training_checkpoints/checkpoint_epoch_{epoch+1}.pth"
-        )
+        
+        torch.save(model.state_dict(), f"training_checkpoints/checkpoint_epoch_{epoch+1}.pth")
         print(f"Checkpoint saved for epoch {epoch+1}.")
 
-    # Evaluate on test set.
-    test_loss, test_next, test_masked, test_outcome, test_auc = evaluate(
-        model,
-        test_loader,
-        device,
-        lambda_next=lambda_next,
-        lambda_masked=lambda_masked,
-        lambda_outcome=lambda_outcome,
+    test_loss, test_next, test_outcome, test_auc = evaluate_model(
+        model, test_loader, device, args.lambda_next, args.lambda_outcome
     )
-    print(
-        f"Test Loss: {test_loss:.4f} (Next: {test_next:.4f}, Masked: {test_masked:.4f}, "
-        f"Outcome: {test_outcome:.4f}, AUC: {test_auc:.4f})"
-    )
-    print("Training completed.")
-
+    print(f"Test Loss: {test_loss:.4f}, Test AUC: {test_auc:.4f}")
     writer.flush()
     writer.close()
-
 
 if __name__ == "__main__":
     main()
