@@ -362,9 +362,10 @@ def main():
     
     # Build transform.
     transform = MultitaskTransform(
-        NextFramePredictionTransform(),
-        MaskFramesTransform(mask_frame_prob=args.masking),
-        OutcomePredictionTransform(),
+        next_frame_transform=NextFramePredictionTransform(),
+        mask_values_transform=MaskValuesTransform(),
+        mask_frames_transform=MaskFramesTransform(mask_frame_prob=args.masking),
+        outcome_transform=OutcomePredictionTransform(),
     )
     
     # Get dataloaders.
