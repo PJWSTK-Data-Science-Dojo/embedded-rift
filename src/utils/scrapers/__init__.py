@@ -12,7 +12,7 @@ class LoLScraper:
     def get_champions_names(self, patch: str = data_dragon.PATCH) -> list[str]:
         return self.ddragon.champions.all_champions_names(patch)
 
-    def get_champion_data(
+    def get_dd_champion_data(
         self, champion_name: str, patch: str = data_dragon.PATCH
     ) -> dict:
         return self.ddragon.champions.get_champion_data(champion_name, patch)
