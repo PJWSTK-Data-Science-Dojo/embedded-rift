@@ -1,0 +1,21 @@
+{
+  "has_on_hit_effects": "The ability applies on-hit effects when striking targets.",
+  "is_autoattack_reset": "The ability resets the champion’s auto-attack timer.",
+  "has_permanent_stacks": "The ability has a permanent stacking mechanic (stacks last the whole game and can't be reset, e.g., Veigar's passive, Aurelion Sol's passive).",
+  "has_temporary_stacks": "The ability has a temporary stacking mechanic (stacks only last for some time or based on some condition, e.g., Hecarim's Q, Graves's E).",
+  "has_dmg_over_time": "The ability applies damage over time (e.g., poison, burn).",
+  "has_execute": "The ability deals increased damage to low-health targets, potentially killing them outright.",
+  "has_persisting_effect": "The ability creates a lingering effect on the battlefield (e.g., damage over time in an area).",
+  "has_untargetable_effect": "The ability can temporarily render a champion untargetable (e.g., Fizz E, Vladimir W).",
+  "has_invulnerable_effect": "The ability can make a champion temporarily invulnerable to any damage (e.g., Kayle ultimate).",
+  "has_unkillable_effect": "The ability makes a champion temporarily unable to die but still able to take damage (e.g., Tryndamere ultimate, Kindred ultimate).",
+  "has_unstoppable_effect": "The ability makes a champion temporarily immune to crowd control effects (e.g., Ornn W).",
+  "modifies_autoattacks": "The ability modifies the champion’s auto-attacks.",
+  "reduces_enemy_vision": "The ability limits or obstructs the vision of enemies.",
+  "blocks_autoattacks": "The ability prevents basic attacks from hitting the target (e.g., Jax’s Counter Strike).",
+  "creates_clone": "The ability creates a clone or decoy of the caster.",
+  "creates_structure": "The ability creates a structure on the battlefield (e.g., turrets, traps, tunnels).",
+  "summons_minion": "The ability summons controllable or uncontrollable minions (e.g., Malzahar's Voidlings, Yorick's Ghouls, Annie's Tibbers).",
+  "has_copy_effect": "The ability has some sort of copy mechanic that allows copying other champions' abilities or appearance.",
+  "has_ammo": "The ability uses a specific ammunition resource separate from cooldown (e.g., Graves's shotgun shells, Jhin's bullets)."
+}

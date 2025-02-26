@@ -1,0 +1,13 @@
+{
+  "is_aoe": "The ability affects multiple targets in a specific area (e.g., deals damage to enemies in a radius).",
+  "is_multitarget": "The ability targets or affects multiple entities simultaneously.",
+  "is_passive": "The ability has a passive effect that does not require activation.",
+  "is_active": "The ability requires activation by the player to function.",
+  "is_toggle": "The ability can be toggled on and off for continuous effects.",
+  "has_charges": "The ability has a charge system, allowing multiple uses before cooldown (e.g., Corki's rockets, Caitlyn's traps).",
+  "is_self_cast": "The ability can be cast or generally applies to the player’s own champion.",
+  "is_ally_cast": "The ability can be cast or can interact with allied champions or units.",
+  "is_enemy_cast": "The ability can be cast or can interact with enemy champions or units.",
+  "is_global": "The ability can be used anywhere on the map, without range restrictions (e.g., Jinx's rocket, Karthus's ultimate, Soraka's ultimate).",
+  "has_channel": "The ability requires channeling, making the caster vulnerable to interruptions."
+}

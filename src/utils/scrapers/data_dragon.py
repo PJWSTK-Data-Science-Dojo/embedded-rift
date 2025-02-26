@@ -3,7 +3,7 @@ from typing import Any
 from utils.api_handler import APIHandler
 
 
-PATCH = "14.24.1"
+PATCH = "15.4.1"
 CHAMPIONS_DDRAGON_URL = (
     "https://ddragon.leagueoflegends.com/cdn/{}/data/en_US/champion.json"
 )
@@ -16,7 +16,7 @@ ITEMS_DDRAGON_URL = "https://ddragon.leagueoflegends.com/cdn/{}/data/en_US/item.
 
 class DataDragonChampionAPI(APIHandler):
     def __init__(self):
-        super().__init__(rate_limit=30, rate_window=30)
+        super().__init__(rate_limit=60, rate_window=30)
         self.cache = {}
 
     def get_all_champions_data(
@@ -32,19 +32,30 @@ class DataDragonChampionAPI(APIHandler):
         return data
 
     def get_champion_data(self, champion_name: str, patch: str = PATCH) -> dict:
+        data = self.get_all_champions_data(patch=patch)
+        champion_id = None
+        for champion in data["data"].values():
+            if champion["name"].lower() == champion_name.lower():
+                champion_id = champion["id"]
+                break
+
+        if champion_id is None:
+            raise ValueError(f"Champion {champion_name} not found.")
+
         champion_name = champion_name.replace(" ", "").replace("'", "").replace(".", "")
-        url = CHAMPION_DDRAGON_URL.format(patch, champion_name)
-        cache_key = f"{patch}|{champion_name}"
+        url = CHAMPION_DDRAGON_URL.format(patch, champion_id)
+
+        cache_key = f"{patch}|{champion_id}"
         if cache_key in self.cache:
             return self.cache[cache_key]
 
         try:
             data = self.get_json(url)
-        except:
-            raise ValueError(f"Champion {champion_name} not found.")
+        except Exception as e:
+            raise ValueError(f"Failed to fetch data for {champion_id}")
 
-        self.cache[cache_key] = data["data"][champion_name]
-        return data["data"][champion_name]
+        self.cache[cache_key] = data["data"][champion_id]
+        return data["data"][champion_id]
 
     def all_champions_names(self, patch: str = PATCH) -> list[str]:
         champions = self.get_all_champions_data(patch=patch)
@@ -55,7 +66,7 @@ class DataDragonChampionAPI(APIHandler):
 
 class DataDragonItemAPI(APIHandler):
     def __init__(self):
-        super().__init__(rate_limit=30, rate_window=30)
+        super().__init__(rate_limit=60, rate_window=30)
         self.cache = {}
 
     def get_all_items(self, patch: str = PATCH) -> dict:
@@ -82,7 +93,6 @@ class DataDragonItemAPI(APIHandler):
 
 class DataDragonAPI:
     def __init__(self):
-        super().__init__(rate_limit=30, rate_window=30)
         self.cache = {}
         self.champions = DataDragonChampionAPI()
         self.items = DataDragonItemAPI()

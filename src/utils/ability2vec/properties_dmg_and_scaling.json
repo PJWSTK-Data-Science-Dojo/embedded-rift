@@ -1,0 +1,17 @@
+{
+  "scaled_with_ap": "The ability’s effectiveness scales with Ability Power (AP).",
+  "scaled_with_ad": "The ability’s effectiveness scales with Attack Damage (AD).",
+  "scaled_with_max_health": "The ability’s effectiveness scales with the target’s maximum health.",
+  "scaled_with_missing_health": "The ability’s effectiveness scales with the target’s missing health.",
+  "scaled_with_current_health": "The ability’s effectiveness scales with the target’s current health.",
+  "scaled_with_mana": "The ability’s effectiveness scales with the champion's Mana.",
+  "scaled_with_armor": "The ability’s effectiveness scales with the champion's Armor.",
+  "scaled_with_mr": "The ability’s effectiveness scales with the champion's Magic Resist.",
+  "scaled_with_movespeed": "The ability’s effectiveness scales with the champion’s Movement Speed.",
+  "scaled_with_crit": "The ability’s effectiveness scales with Critical Strike Chance or Damage.",
+  "scaled_with_bonus_ad": "The ability scales with bonus Attack Damage.",
+  "scaled_with_bonus_health": "The ability scales with bonus health (health from items, runes, etc.).",
+  "deals_magic_damage": "The ability deals magic damage.",
+  "deals_physical_damage": "The ability deals physical damage.",
+  "deals_true_damage": "The ability deals true damage, ignoring resistances."
+}

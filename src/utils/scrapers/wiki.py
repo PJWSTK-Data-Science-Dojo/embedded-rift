@@ -38,7 +38,7 @@ IGNORED_KEYS = [
 
 class WikiScraper(APIHandler):
     def __init__(self):
-        super().__init__(rate_window=30, rate_limit=30)
+        super().__init__(rate_window=60, rate_limit=30)
         self._cache = {}
 
     def get_champion_ability_names(self, champion: str) -> list[str]:
@@ -46,12 +46,26 @@ class WikiScraper(APIHandler):
         response = self.send_request(lol_wiki.format(champion))
 
         sel = parsel.Selector(response.text)
-        abilities = sel.css(".skill > div .ability-info-stats__ability::text").getall()
-        return [ability.strip() for ability in abilities]
+        abilities: list[str] = sel.css(
+            ".skill > div .ability-info-stats__ability::text"
+        ).getall()
+
+        result = []
+        for ability in abilities:
+            ability = ability.strip()
+            if ability.startswith("/"):
+                ability = ability.removeprefix("/").title()
+
+            if champion == "Kled":
+                ability = ability.replace(",", "")
+
+            result.append(ability)
+        return result
 
     def get_ability_data(self, champion: str, ability: str) -> dict:
         champion = champion.replace(" ", "_").replace("'", "%27")
         ability = ability.replace(" ", "_").replace("'", "%27")
+
         selector = self._get_skill_selector(champion, ability)
         return self._extract_ability_data(selector)
 
@@ -190,6 +204,17 @@ class WikiScraper(APIHandler):
             .replace("'", "%27")
         )
         resp = self.send_request(url)
+
+        if resp.status_code == 200:
+            return parsel.Selector(resp.text)
+
+        url = (
+            lol_wiki.format(template.format(champion, skill))
+            .replace(" ", "_")
+            .replace("'", "%27")
+        )
+        resp = self.send_request(url)
+
         if resp.status_code != 200:
             print(f"Failed to fetch skill page {url}")
             print(resp.status_code)

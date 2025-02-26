@@ -1,0 +1,21 @@
+{
+  "debuffs_health_points": "Reduces the champion's maximum health points.",
+  "debuffs_healing": "Decreases the effectiveness of healing received by the champion.",
+  "debuffs_resource": "Reduces the champion's maximum resource pool (Mana, Energy, etc.).",
+  "debuffs_resource_regen": "Slows down the rate at which the champion regenerates their resource.",
+  "debuffs_attack_speed": "Lowers the champion's attack speed, causing slower basic attacks.",
+  "debuffs_armor_pen": "Decreases the champion's ability to bypass the target's armor.",
+  "debuffs_magic_pen": "Decreases the champion's ability to bypass the target's magic resistance.",
+  "debuffs_magic_resists": "Reduces the champion's magic resistance, making them more vulnerable to magic damage.",
+  "debuffs_armor": "Reduces the champion's armor, making them more vulnerable to physical damage.",
+  "debuffs_attack_damage": "Decreases the champion's base attack damage (AD).",
+  "debuffs_ability_power": "Reduces the champion's ability power (AP), lowering their magic damage output.",
+  "debuffs_cooldown": "Increases the cooldown duration of some abilities, delaying their availability or decreases ability haste.",
+  "debuffs_crit_dmg": "Lowers the damage multiplier on critical strikes.",
+  "debuffs_crit_rate": "Reduces the chance of landing a critical strike on attacks.",
+  "debuffs_tenacity": "Increases the duration of crowd control effects on the champion.",
+  "debuffs_heal/shield_power": "Reduces the effectiveness of healing and shielding abilities.",
+  "debuffs_gold": "Introduces a mechanic that grants decreased amount of gold from some sources.",
+  "debuffs_attack_range": "Shortens the champion's attack range, forcing them to fight at closer distances.",
+  "debuffs_dmg_amp": "Reduces the champion's overall damage output."
+}
