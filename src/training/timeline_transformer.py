@@ -108,147 +108,95 @@ class MultiTaskTransformer(nn.Module):
 
         # Task-specific heads:
         self.frame_pred_head = nn.Linear(d_model, feature_dim)
-        self.masked_pred_head = nn.Linear(d_model, feature_dim)
         self.classifier = nn.Linear(d_model, 1)
 
     def forward(
         self, frames: torch.Tensor, champions: torch.Tensor, items: torch.Tensor
     ):
-        """
-        Args:
-            frames: Tensor of shape (batch, seq_len, feature_dim) for continuous features.
-            champions:
-            items: Tensor of shape (batch, seq_len, item_slots)
-        Returns:
-            next_frame_pred: Prediction for next frame features (autoregressive).
-            masked_value_pred: Prediction for masked value reconstruction.
-            outcome_logits: Logits for game outcome classification.
-        """
-        # fmt: off
         batch_size, seq_len, _ = frames.size()
-
+        # fmt: off
         # Project continuous features.
         cont_embeds = self.input_proj(frames)  # (batch, seq_len, d_model)
 
-        # Process champion embeddings:
-        # champions: (batch, n_champions_in_game)
+        # Process champion embeddings.
         champ_embeds = self.champion_embedding(champions)  # (batch, n_champions_in_game, champions_model)
         champ_embeds = champ_embeds.view(batch_size, -1)     # (batch, n_champions_in_game * champions_model)
-        # Broadcast to each frame:
         champ_embeds = champ_embeds.unsqueeze(1).expand(-1, seq_len, -1)  # (batch, seq_len, n_champions_in_game * champions_model)
         champ_embeds = self.champion_proj(champ_embeds)  # (batch, seq_len, d_model)
 
-        # Process item embeddings:
-        # items: (batch, seq_len, item_slots)  where item_slots is 60
+        # Process item embeddings.
         item_embeds = self.item_embedding(items)  # (batch, seq_len, item_slots, items_model)
-        # Group items by 6:
-        num_groups = items.size(2) // 6  # should be 10
+        num_groups = items.size(2) // 6  # should be 10 if item_slots is 60.
         item_embeds = item_embeds.view(batch_size, seq_len, num_groups, 6, self.items_model)
         item_embeds = item_embeds.mean(dim=3)  # (batch, seq_len, num_groups, items_model)
         item_embeds = item_embeds.view(batch_size, seq_len, num_groups * self.items_model)  # flatten groups
         item_embeds = self.item_proj(item_embeds)  # (batch, seq_len, d_model)
 
-        # Combine continuous, champion, and item embeddings:
+        # Combine continuous, champion, and item embeddings.
         x_embed = torch.cat([cont_embeds, champ_embeds, item_embeds], dim=-1)  # (batch, seq_len, 3*d_model)
         x_embed = self.comb_proj(x_embed)  # (batch, seq_len, d_model)
 
-        # Optionally, prepend a CLS token.
+        # Prepend CLS token.
         if self.use_cls_token:
-            cls_tokens = self.cls_token.expand(
-                batch_size, -1, -1
-            )  # (batch, 1, d_model)
-            x_embed = torch.cat(
-                [cls_tokens, x_embed], dim=1
-            )  # (batch, 1+seq_len, d_model)
+            cls_tokens = self.cls_token.expand(batch_size, -1, -1)  # (batch, 1, d_model)
+            x_embed = torch.cat([cls_tokens, x_embed], dim=1)  # (batch, 1+seq_len, d_model)
 
+        # Append EOS token.
         if self.use_eos_token:
             eos_tokens = self.eos_token.expand(batch_size, -1, -1)
             x_embed = torch.cat([x_embed, eos_tokens], dim=1)
 
-        # Add positional encodings.
+        # Add positional encoding.
         x_embed = self.pos_encoder(x_embed)
-
-        # Transformer expects input as (seq_len, batch, d_model).
-        x_embed = x_embed.transpose(0, 1)
+        x_embed = x_embed.transpose(0, 1)  # (seq_len, batch, d_model)
         x_encoded = self.transformer_encoder(x_embed)
-        x_encoded = x_encoded.transpose(0, 1)  # (batch, seq_len (+1), d_model)
+        x_encoded = x_encoded.transpose(0, 1)  # (batch, seq_len(+tokens), d_model)
 
         # Remove the CLS token for frame-level predictions.
         seq_output = x_encoded[:, 1:, :] if self.use_cls_token else x_encoded
 
-        # 1. Next Frame Prediction:
-        # Ensure there are enough tokens: we need at least 3 tokens (CLS, at least one frame, EOS)
+        # Next Frame Prediction:
         if seq_output.size(1) > 2:
-            # Use the first (T - 2) tokens, where T = seq_output.size(1), so that the prediction length is T - 2.
-            # This will match the target shape of frames[:, 1:, :], which is (batch, L - 1, feature_dim) if original L frames.
             next_frame_input = seq_output[:, : -2, :]
             next_frame_pred = self.frame_pred_head(next_frame_input)
         else:
             next_frame_pred = None
 
-        # 2. Masked Value Prediction:
-        if self.use_eos_token:
-            masked_value_pred = self.masked_pred_head(seq_output[:, :-1, :])
-        else:
-            masked_value_pred = self.masked_pred_head(seq_output)
-
-        # 3. Outcome Prediction:
+        # Outcome Prediction:
         if self.use_cls_token:
-            cls_rep = x_encoded[:, 0, :]  # (batch, d_model)
+            cls_rep = x_encoded[:, 0, :]
         else:
-            cls_rep = x_encoded[:, -1, :]  # (batch, d_model)
-            if x_encoded.shape[1] >= 15:
-                cls_rep = x_encoded[:, 15, :]
-                
+            cls_rep = x_encoded[:, 0, :]
         outcome_logits = self.classifier(cls_rep).squeeze(-1)
-
         # fmt: on
-        return next_frame_pred, masked_value_pred, outcome_logits
+        return next_frame_pred, outcome_logits
 
 
 def compute_combined_loss(
     frames,
     next_frame_pred,
-    masked_value_pred,
     outcome_logits,
     sample,
     lambda_next=1.0,
-    lambda_masked=1.0,
     lambda_outcome=1.0,
-    use_masked_values=False,
 ):
     mse_loss = F.mse_loss
     bce_loss = F.binary_cross_entropy_with_logits
 
     # 1. Next Frame Prediction Loss
     if next_frame_pred is not None:
-        target_next_frames = frames[
-            :, 1:, :
-        ]  # or frames[:, 1:, :] if you shifted by 2 in the model
+        target_next_frames = frames[:, 1:, :]
         loss_next = mse_loss(next_frame_pred, target_next_frames)
     else:
         loss_next = 0.0
 
-    # 2. Masked Value Prediction Loss
-    mask = sample["mask_values"]  # (batch, seq_len, feature_dim) bool
-    if mask.sum() > 0:
-        pred_masked = masked_value_pred[mask]
-        target_masked = frames[mask]
-        loss_masked = mse_loss(pred_masked, target_masked)
-    else:
-        loss_masked = 0.0
-
-    # 3. Outcome Prediction Loss
+    # 2. Outcome Prediction Loss
     target_outcome = sample["outcome"].to(outcome_logits.device)
     loss_outcome = bce_loss(outcome_logits, target_outcome)
 
-    total_loss = (
-        lambda_next * loss_next
-        + lambda_masked * loss_masked
-        + lambda_outcome * loss_outcome
-    )
+    total_loss = lambda_next * loss_next + lambda_outcome * loss_outcome
 
-    return total_loss, loss_next, loss_masked, loss_outcome
+    return total_loss, loss_next, loss_outcome
 
 
 def evaluate(
@@ -270,7 +218,7 @@ def evaluate(
 
     with torch.no_grad():
         for batch in dataloader:
-            frames = batch["frames_masked_values"].to(device)
+            frames = batch["frames_masked"].to(device)
             # frames = batch["frames"].to(device)
             champions = batch["champions"].to(device)
             items = batch["items"].to(device)
@@ -370,18 +318,18 @@ def custom_collate_fn(batch):
         "champions": champions_tensor,
     }
 
-    # Handle frames_masked_values if available.
-    if "frames_masked_values" in batch[0]:
+    # Handle frames_masked if available.
+    if "frames_masked" in batch[0]:
         masked_frames_list = [
             (
-                torch.tensor(item["frames_masked_values"], dtype=torch.float32)
-                if not torch.is_tensor(item["frames_masked_values"])
-                else item["frames_masked_values"]
+                torch.tensor(item["frames_masked"], dtype=torch.float32)
+                if not torch.is_tensor(item["frames_masked"])
+                else item["frames_masked"]
             )
             for item in batch
         ]
         padded_masked_frames = pad_sequence(masked_frames_list, batch_first=True)
-        collated["frames_masked_values"] = padded_masked_frames
+        collated["frames_masked"] = padded_masked_frames
 
     if "mask_values" in batch[0]:
         mask_list = [
@@ -479,8 +427,8 @@ def main():
     masking = args.masking
     transform = MultitaskTransform(
         NextFramePredictionTransform(),
-        MaskValuesTransform(mask_val_prob=masking),
-        MaskFramesTransform(),
+        MaskValuesTransform(),
+        MaskFramesTransform(mask_frame_prob=masking),
         OutcomePredictionTransform(),
     )
 
@@ -550,7 +498,7 @@ def main():
 
         pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}")
         for batch in pbar:
-            frames = batch["frames_masked_values"].to(device)
+            frames = batch["frames_masked"].to(device)
 
             champions = batch["champions"].to(device)
             items = batch["items"].to(device)
@@ -567,20 +515,14 @@ def main():
             #     )
 
             optimizer.zero_grad()
-            next_frame_pred, masked_value_pred, outcome_logits = model(
-                frames, champions, items
-            )
-            total_loss_batch, loss_next, loss_masked, loss_outcome = (
-                compute_combined_loss(
-                    frames,
-                    next_frame_pred,
-                    masked_value_pred,
-                    outcome_logits,
-                    batch,
-                    lambda_next=lambda_next,
-                    lambda_masked=lambda_masked,
-                    lambda_outcome=lambda_outcome,
-                )
+            next_frame_pred, _, outcome_logits = model(frames, champions, items)
+            total_loss_batch, loss_next, loss_outcome = compute_combined_loss(
+                frames,
+                next_frame_pred,
+                outcome_logits,
+                batch,
+                lambda_next=lambda_next,
+                lambda_outcome=lambda_outcome,
             )
             total_loss_batch.backward()
             optimizer.step()
@@ -589,11 +531,7 @@ def main():
             epoch_next_loss += (
                 loss_next.item() if isinstance(loss_next, torch.Tensor) else loss_next
             )
-            epoch_masked_loss += (
-                loss_masked.item()
-                if isinstance(loss_masked, torch.Tensor)
-                else loss_masked
-            )
+
             epoch_outcome_loss += (
                 loss_outcome.item()
                 if isinstance(loss_outcome, torch.Tensor)
