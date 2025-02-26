@@ -163,7 +163,7 @@ class MultiTaskTransformer(nn.Module):
             cls_rep = x_encoded[:, 0, :]
         else:
             # cls_rep = x_encoded[:, 0, :]
-            cls_rep = cont_embeds[:, 0, :]
+            cls_rep = champ_embeds[:, 0, :]
         outcome_logits = self.classifier(cls_rep).squeeze(-1)
 
         return next_frame_pred, outcome_logits
