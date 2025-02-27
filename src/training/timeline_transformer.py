@@ -413,7 +413,7 @@ def main():
     )
     model.to(device)
     
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.5)
     writer = SummaryWriter(log_dir=args.logdir)
     
