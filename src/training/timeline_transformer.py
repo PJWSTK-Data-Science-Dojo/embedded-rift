@@ -426,7 +426,7 @@ def main():
             model, train_loader, optimizer, device, args.lambda_next, args.lambda_outcome
         )
         scheduler.step()
-        
+        print(f"Epoch {epoch+1}: Train Next Loss {train_next:.4f}, Train Outcome Loss {train_outcome:.4f}, Train Acc {train_acc:.4f}")
         writer.add_scalar("Loss/Train_Next", train_next, epoch)
         writer.add_scalar("Loss/Train_Outcome", train_outcome, epoch)
         
@@ -434,7 +434,7 @@ def main():
             model, val_loader, device, args.lambda_next, args.lambda_outcome
         )
         
-        print(f"Epoch {epoch+1}: Train Loss {train_loss:.4f}, Train Acc {train_acc:.4f} | Val Loss {val_loss:.4f}, Val AUC {val_auc:.4f}")
+        print(f"Epoch {epoch+1}: Val Loss {val_loss:.4f}, Val AUC {val_auc:.4f}, Val Outcome Loss {val_outcome:.4f}")
         writer.add_scalar("Loss/Val_Next", val_next, epoch)
         writer.add_scalar("Loss/Val_Outcome", val_outcome, epoch)
         writer.add_scalar("Loss/Train", train_loss, epoch)
