@@ -165,3 +165,9 @@ data/
 viz/
 mongo-data/
 .mongo-data/
+
+runs/
+logs/
+
+tc_*/
+checkpoints/
