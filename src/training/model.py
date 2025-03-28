@@ -117,7 +117,8 @@ class MultiTaskTimelineModel(nn.Module):
             "position_logits": position_logits,
             "side_logits": side_logits,
             "win_logit": win_logit,
-            "per_frame_win_rate": per_frame_win_rate
+            "per_frame_win_rate": per_frame_win_rate,
+            "cls_token": global_repr,
         }
         
         

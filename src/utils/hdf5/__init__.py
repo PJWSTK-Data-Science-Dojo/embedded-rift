@@ -156,6 +156,9 @@ class HDF5Database:
                 
         return entires
 
+    def get_game_ids(self) -> List[str]:
+        return list(self.games_group.keys())
+    
     def get_player_timeline_by_pseudo_id(self, pseudo_id: str) -> h5py.Dataset:
         """
         Retrieve the player timeline dataset using a pseudo ID formatted as "game_id_playerIdx".
