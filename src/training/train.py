@@ -6,12 +6,12 @@ from tqdm import tqdm
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 import argparse
-
+import os
 # Import our custom modules.
-from training.datasets.timeline import TimelineDataset
-from training.transforms.player_timeline import PlayerTimelineTransform
+from training.datasets.player_timeline import PlayerTimelineDataset
+from training.datasets.transforms.pt_transform import PlayerTimelineTransform
 from training.model import (
-    MultiTaskTimelineModel,
+    PlayerTimelineSummaryModel,
     collate_fn,  # our custom collate function that batches our keys.
     compute_loss
 )
@@ -19,7 +19,7 @@ from training.model import (
 #########################################
 # Training and Evaluation Loops
 #########################################
-def train_one_epoch(model, dataloader, optimizer, device, lambda_next):
+def train_one_epoch(model, dataloader, optimizer, device):
     model.train()
     total_loss = 0.0
     total_loss_detials = {
@@ -31,6 +31,8 @@ def train_one_epoch(model, dataloader, optimizer, device, lambda_next):
         "loss_side": 0,
         "loss_win": 0,
         "loss_win_rate": 0,
+        "loss_cham_champion": 0,
+        "loss_cham_position": 0,
     }
     
     pbar = tqdm(dataloader, desc="Training")
@@ -39,7 +41,8 @@ def train_one_epoch(model, dataloader, optimizer, device, lambda_next):
         frames = batch["frames"].to(device)
         # Use the target champion from the batch; here we remap the key to "champion"
         champion_target = batch["champion"].to(device)
-        composition_ids = batch["composition_champion_ids"].to(device)
+        ally_champions = batch["ally_champions"].to(device)
+        enemy_champions = batch["enemy_champions"].to(device)
         
         # Build targets dictionary. For reconstruction, we use the unmasked original_frames.
         targets = {
@@ -54,15 +57,23 @@ def train_one_epoch(model, dataloader, optimizer, device, lambda_next):
         }
         
         optimizer.zero_grad()
-        outputs = model(frames, champion_target, composition_ids)
-        loss, loss_details = compute_loss(outputs, targets, lambda_next=lambda_next)
+        outputs = model(frames, champion_target, ally_champions, enemy_champions)
+        # print(outputs)
+        # outputs = {key: torch.nan_to_num(value) for key, value in outputs.items()}
+        # print(outputs)
+        loss, loss_details = compute_loss(outputs, targets)
+        # print(loss_details["loss_next"])
         loss.backward()
         optimizer.step()
+
+        if torch.isnan(loss):
+            print(targets)
+            raise Exception()
         
         total_loss += loss.item()
         for k, v in loss_details.items():
             total_loss_detials[k] += v
-            
+
         pbar.set_postfix({
             "loss": f"{loss.item():.4f}",
             "next_loss": f"{loss_details.get('loss_next', 0.0):.4f}",
@@ -71,7 +82,7 @@ def train_one_epoch(model, dataloader, optimizer, device, lambda_next):
     avg_loss_keys = {k: v / len(dataloader) for k, v in total_loss_detials.items()}
     return avg_loss, avg_loss_keys
 
-def evaluate_model(model, dataloader, device, lambda_next):
+def evaluate_model(model, dataloader, device):
     model.eval()
     total_loss = 0.0
     total_loss_detials = {
@@ -83,6 +94,8 @@ def evaluate_model(model, dataloader, device, lambda_next):
         "loss_side": 0,
         "loss_win": 0,
         "loss_win_rate": 0,
+        "loss_cham_champion": 0,
+        "loss_cham_position": 0,
     }
     
     count = 0
@@ -92,7 +105,8 @@ def evaluate_model(model, dataloader, device, lambda_next):
         for batch in pbar:
             frames = batch["frames"].to(device)
             champion_target = batch["champion"].to(device)
-            composition_ids = batch["composition_champion_ids"].to(device)
+            ally_champions = batch["ally_champions"].to(device)
+            enemy_champions = batch["enemy_champions"].to(device)
             
             targets = {
                 "duration": batch["duration"].to(device),
@@ -104,8 +118,8 @@ def evaluate_model(model, dataloader, device, lambda_next):
                 "win": batch["win"].to(device),
             }
             
-            outputs = model(frames, champion_target, composition_ids)
-            loss, loss_details = compute_loss(outputs, targets, lambda_next=lambda_next)
+            outputs = model(frames, champion_target, ally_champions, enemy_champions)
+            loss, loss_details = compute_loss(outputs, targets)
             
             total_loss += loss.item()
             for k, v in loss_details.items():
@@ -119,15 +133,15 @@ def evaluate_model(model, dataloader, device, lambda_next):
     avg_loss_keys = {k: v / count for k, v in total_loss_detials.items()}
     return avg_loss, avg_loss_keys 
 
-def get_dataloaders(dataset, batch_size=4):
+def get_dataloaders(dataset, batch_size=4, workers=6):
     total_size = len(dataset)
     train_size = int(0.8 * total_size)
     val_size = int(0.1 * total_size)
     test_size = total_size - train_size - val_size
     train_dataset, val_dataset, test_dataset = random_split(dataset, [train_size, val_size, test_size])
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn, num_workers=workers)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn, num_workers=workers)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn, num_workers=workers)
     return train_loader, val_loader, test_loader, dataset
 
 #########################################
@@ -145,7 +159,12 @@ def parse_args():
     return parser.parse_args()
 
 def train(dataset, args):
-    train_loader, val_loader, test_loader, full_dataset = get_dataloaders(dataset, batch_size=args.batch_size)
+    num_cores = min(8, os.cpu_count())
+    print(f"Number of CPU cores: {num_cores}")
+    torch.set_num_threads(num_cores)
+    torch.set_num_interop_threads(num_cores)
+    print(f"Using {num_cores} threads for PyTorch.")
+    train_loader, val_loader, test_loader, full_dataset = get_dataloaders(dataset, batch_size=args.batch_size, workers=num_cores // 2)
         
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
@@ -155,11 +174,11 @@ def train(dataset, args):
     feature_dim = sample_game["frames"].shape[-1]
     
     # Build our multi-task model.
-    model = MultiTaskTimelineModel(
+    model = PlayerTimelineSummaryModel(
         feature_dim=feature_dim,
         d_model=256,
         num_champions=200,
-        champion_embedding_dim=128,
+        champion_embedding_dim=16,
         max_seq_len=70,
         num_layers=4,
         num_heads=8,
@@ -174,8 +193,13 @@ def train(dataset, args):
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     writer_dir.mkdir(parents=True, exist_ok=True)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
-    # Potencjalna zmiana schedulera CosineAnnealingLR Reducelronplateau
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.5)
+    # Potential change of scheduler CosineAnnealingLR Reducelronplateau
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer,
+        mode="min",       # We want to reduce LR when validation loss stops decreasing.
+        factor=0.5,       # Multiply LR by 0.5 on plateau.
+        patience=2,       # Number of epochs with no improvement before reducing LR.
+    )
     writer = SummaryWriter(log_dir=writer_dir)
     
     num_epochs = args.epochs
@@ -183,20 +207,21 @@ def train(dataset, args):
     no_improvement = 0
 
     for epoch in range(num_epochs):
-        train_loss, train_loss_details = train_one_epoch(model, train_loader, optimizer, device, args.lambda_next)
-        scheduler.step()
+        train_loss, train_loss_details = train_one_epoch(model, train_loader, optimizer, device)
         print(f"Epoch {epoch+1}: Train Loss {train_loss:.4f}, Recon Timeline Loss {train_loss_details.get('loss_timeline', 0.0):.4f}")
         writer.add_scalar("Loss/Train", train_loss, epoch)
         for key, value in train_loss_details.items():
             writer.add_scalar(f"Loss/Train_{key}", value, epoch)
 
         
-        val_loss, val_loss_details = evaluate_model(model, val_loader, device, args.lambda_next)
+        val_loss, val_loss_details = evaluate_model(model, val_loader, device)
         print(f"Epoch {epoch+1}: Val Loss {val_loss:.4f}, Val Recon Timeline Loss {val_loss_details.get('loss_timeline', 0.0):.4f}")
         writer.add_scalar("Loss/Val", val_loss, epoch)
         for key, value in val_loss_details.items():
             writer.add_scalar(f"Loss/Val_{key}", value, epoch)
         
+        scheduler.step(val_loss)
+        # print(f"Learning rate: {scheduler.get_last_lr():.6f}")
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             no_improvement = 0
@@ -212,7 +237,7 @@ def train(dataset, args):
         torch.save(model.state_dict(), checkpoint_dir / f"checkpoint_epoch_{epoch+1}.pth")
         print(f"Checkpoint saved for epoch {epoch+1}.")
 
-    test_loss, test_loss_details = evaluate_model(model, test_loader, device, args.lambda_next)
+    test_loss, test_loss_details = evaluate_model(model, test_loader, device)
     print(f"Test Loss: {test_loss:.4f}, Test Recon Timeline Loss {test_loss_details.get('loss_timeline', 0.0):.4f}")
     writer.add_scalar("Loss/Test", test_loss, epoch)
     for key, value in test_loss_details.items():
@@ -231,7 +256,7 @@ def main():
     transform = PlayerTimelineTransform(mask_frame_prob=args.masking)
     
     # Get dataloaders.
-    with TimelineDataset(db_dir=args.h5, transform=transform) as dataset:
+    with PlayerTimelineDataset(db_dir=args.h5, transform=transform) as dataset:
         train(dataset, args)
 
 if __name__ == "__main__":

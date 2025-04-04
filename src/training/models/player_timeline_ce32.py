@@ -53,8 +53,6 @@ class PlayerTimelineSummaryModel(nn.Module):
         self.timeline_recon_head = TimelineReconstructionHead(d_model=d_model, feature_dim=feature_dim, max_seq_len=max_seq_len)
         self.champion_head = ChampionPredictionHead(d_model=d_model, num_champions=num_champions)
         self.position_head = RolePredictionHead(d_model=d_model, num_positions=num_positions)
-        self.champion_position_head = RolePredictionHead(d_model=champion_embedding_dim, num_positions=num_positions)
-        self.champion_champion_head = ChampionPredictionHead(d_model=champion_embedding_dim, num_champions=num_champions)
         self.side_head = SidePredictionHead(d_model=d_model)
         self.win_head = WinPredictionHead(d_model=d_model)
         self.per_frame_win_rate_head = PerFrameWinRatePredictionHead(d_model=d_model)
@@ -104,45 +102,39 @@ class PlayerTimelineSummaryModel(nn.Module):
             torch.split(encoded, [1, 1, 1, 1, seq_len], dim=1)
         )
         sq_cls = cls_token.squeeze(1)  # (batch, d_model)
-        sq_champ = champ_embed.squeeze(1)  # (batch, d_model)
         # Get predictions from each head.
-        next_frame_pred = self.next_frame_head(timeline_tokens[:, :-1, :])       # (batch, seq_len-1, feature_dim)
-        per_frame_win_rate = self.per_frame_win_rate_head(timeline_tokens)       # (batch, seq_len, 1)
-        
         duration_pred = self.duration_head(sq_cls)                       # (batch, 1)
+        next_frame_pred = self.next_frame_head(timeline_tokens[:, :-1, :])       # (batch, seq_len-1, feature_dim)
         timeline_recon = self.timeline_recon_head(sq_cls, recon_seq_len)    # (batch, recon_seq_len, feature_dim)
         champion_logits = self.champion_head(sq_cls)                      # (batch, num_champions)
         position_logits = self.position_head(sq_cls)                      # (batch, num_positions)
         side_logits = self.side_head(sq_cls)                              # (batch, 2)
         win_logit = self.win_head(sq_cls)                                  # (batch, 1)
+        per_frame_win_rate = self.per_frame_win_rate_head(timeline_tokens)       # (batch, seq_len, 1)
         
-        champion_position_logits = self.champion_position_head(target_embed)    # (batch, num_positions)
-        champion_champion_logits = self.champion_champion_head(target_embed)    # (batch, num_champions)
         return {
-            "predictions": {
-                "timeline": {
-                    "next_frame_pred": next_frame_pred,
-                    "per_frame_win_rate": per_frame_win_rate,
-                },
-                "cls": {
-                    "timeline_recon": timeline_recon,
-                    "duration_pred": duration_pred,
-                    "champion_logits": champion_logits,
-                    "position_logits": position_logits,
-                    "side_logits": side_logits,
-                    "win_logit": win_logit,
-                },
-                "champion": {
-                    "position_logits": champion_position_logits,
-                    "champion_logits": champion_champion_logits,
-                }
-            },
-            "cls_token": sq_cls,       # Global game summary embedding.
-            "champion_embedding": sq_champ,   # Champion representation.
+            "duration_pred": duration_pred,
+            "next_frame_pred": next_frame_pred,
+            "timeline_recon": timeline_recon,
+            "champion_logits": champion_logits,
+            "position_logits": position_logits,
+            "side_logits": side_logits,
+            "win_logit": win_logit,
+            "per_frame_win_rate": per_frame_win_rate,
+            "global_repr": sq_cls,       # Global game summary embedding.
+            "champion_embedding": champ_embed,   # Champion representation.
         }
         
         
-def compute_loss(outputs: dict, targets: dict):
+def compute_loss(outputs: dict, targets: dict,
+                           lambda_duration: float = 1.0,
+                           lambda_next: float = 1.0,
+                           lambda_timeline: float = 1.0,
+                           lambda_champion: float = 1.0,
+                           lambda_position: float = 1.0,
+                           lambda_side: float = 1.0,
+                           lambda_win: float = 1.0,
+                           lambda_win_rate: float = 1.0):
     """
     Computes a composite loss for multi-task learning.
 
@@ -170,47 +162,44 @@ def compute_loss(outputs: dict, targets: dict):
         total_loss: Combined weighted loss.
         loss_details: A dictionary with individual loss values for monitoring.
     """
-    cls = outputs["predictions"]["cls"]
-    timeline = outputs["predictions"]["timeline"]
-    champion = outputs["predictions"]["champion"]
-    
-    loss_cham_champion = F.cross_entropy(champion["champion_logits"], targets["champion"])    
-    loss_cham_position = F.cross_entropy(champion["position_logits"], targets["position"])
     # Duration Prediction Loss: Mean Squared Error
-    loss_duration = F.mse_loss(cls["duration_pred"].squeeze(), targets["duration"].float())
+    loss_duration = F.mse_loss(outputs["duration_pred"].squeeze(), targets["duration"].float())
     
     # Next Frame Prediction Loss: MSE Loss between predicted next frames and target frames shifted by one time step.
     # Assuming target frames shape is (batch, seq_len, feature_dim) and next_frame_pred predicts for seq_len-1 steps.
-    loss_next = F.mse_loss(timeline["next_frame_pred"], targets["original_frames"][:, 1:, :])
+    loss_next = F.mse_loss(outputs["next_frame_pred"], targets["original_frames"][:, 1:, :])
 
     # Whole Timeline Reconstruction Loss: MSE Loss between reconstructed timeline and original frames.
-    loss_timeline = F.mse_loss(cls["timeline_recon"], targets["original_frames"])
+    loss_timeline = F.mse_loss(outputs["timeline_recon"], targets["original_frames"])
 
     # Champion Prediction Loss: Cross-Entropy Loss.
-    loss_champion = F.cross_entropy(cls["champion_logits"], targets["champion"])
+    loss_champion = F.cross_entropy(outputs["champion_logits"], targets["champion"])
     
     # Position Prediction Loss: Cross-Entropy Loss.
-    loss_position = F.cross_entropy(cls["position_logits"], targets["position"])
+    loss_position = F.cross_entropy(outputs["position_logits"], targets["position"])
 
     # Side Prediction Loss: Cross-Entropy Loss.
-    loss_side = F.cross_entropy(cls["side_logits"], targets["side"])
+    loss_side = F.cross_entropy(outputs["side_logits"], targets["side"])
 
     # Win Prediction Loss: Binary Cross-Entropy with Logits.
-    loss_win = F.binary_cross_entropy_with_logits(cls["win_logit"].squeeze(), targets["win"].float())
+    loss_win = F.binary_cross_entropy_with_logits(outputs["win_logit"].squeeze(), targets["win"].float())
 
     # Per-Frame Win Rate Prediction Loss: MSE Loss.
     # Get batch size and sequence length from model output.
-    batch_size, seq_len, _ = timeline["per_frame_win_rate"].shape
+    batch_size, seq_len, _ = outputs["per_frame_win_rate"].shape
     # Expand win label (shape: (batch,)) to (batch, seq_len)
     win_target = targets["win"].float().unsqueeze(1).expand(batch_size, seq_len)
     # Compute MSE loss between predicted win rates (squeezed to shape (batch, seq_len)) and the constant win target.
-    loss_win_rate = F.mse_loss(timeline["per_frame_win_rate"].squeeze(-1), win_target)
+    loss_win_rate = F.mse_loss(outputs["per_frame_win_rate"].squeeze(-1), win_target)
 
-    total_loss = (
-        loss_champion + loss_duration + loss_next + loss_timeline + \
-        loss_cham_champion + loss_cham_position + loss_position + loss_side + \
-        loss_win + loss_win_rate     
-    )
+    total_loss = (lambda_duration * loss_duration +
+                  lambda_next * loss_next +
+                  lambda_timeline * loss_timeline +
+                  lambda_champion * loss_champion +
+                  lambda_position * loss_position +
+                  lambda_side * loss_side +
+                  lambda_win * loss_win +
+                  lambda_win_rate * loss_win_rate)
 
     loss_details = {
         "loss_duration": loss_duration.item() if isinstance(loss_duration, torch.Tensor) else loss_duration,
@@ -221,8 +210,6 @@ def compute_loss(outputs: dict, targets: dict):
         "loss_side": loss_side.item() if isinstance(loss_side, torch.Tensor) else loss_side,
         "loss_win": loss_win.item() if isinstance(loss_win, torch.Tensor) else loss_win,
         "loss_win_rate": loss_win_rate.item() if isinstance(loss_win_rate, torch.Tensor) else loss_win_rate,
-        "loss_cham_champion": loss_cham_champion.item() if isinstance(loss_cham_champion, torch.Tensor) else loss_cham_champion,
-        "loss_cham_position": loss_cham_position.item() if isinstance(loss_cham_position, torch.Tensor) else loss_cham_position,
     }
 
     return total_loss, loss_details

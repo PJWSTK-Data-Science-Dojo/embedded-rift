@@ -53,8 +53,8 @@ class PlayerTimelineSummaryModel(nn.Module):
         self.timeline_recon_head = TimelineReconstructionHead(d_model=d_model, feature_dim=feature_dim, max_seq_len=max_seq_len)
         self.champion_head = ChampionPredictionHead(d_model=d_model, num_champions=num_champions)
         self.position_head = RolePredictionHead(d_model=d_model, num_positions=num_positions)
-        self.champion_position_head = RolePredictionHead(d_model=champion_embedding_dim, num_positions=num_positions)
-        self.champion_champion_head = ChampionPredictionHead(d_model=champion_embedding_dim, num_champions=num_champions)
+        self.champion_position_head = RolePredictionHead(d_model=d_model, num_positions=num_positions)
+        self.champion_champion_head = ChampionPredictionHead(d_model=d_model, num_champions=num_champions)
         self.side_head = SidePredictionHead(d_model=d_model)
         self.win_head = WinPredictionHead(d_model=d_model)
         self.per_frame_win_rate_head = PerFrameWinRatePredictionHead(d_model=d_model)
@@ -116,8 +116,8 @@ class PlayerTimelineSummaryModel(nn.Module):
         side_logits = self.side_head(sq_cls)                              # (batch, 2)
         win_logit = self.win_head(sq_cls)                                  # (batch, 1)
         
-        champion_position_logits = self.champion_position_head(target_embed)    # (batch, num_positions)
-        champion_champion_logits = self.champion_champion_head(target_embed)    # (batch, num_champions)
+        champion_position_logits = self.champion_position_head(sq_champ)    # (batch, num_positions)
+        champion_champion_logits = self.champion_champion_head(sq_champ)    # (batch, num_champions)
         return {
             "predictions": {
                 "timeline": {

@@ -1,22 +1,28 @@
-from training.champion_transformer import ChampionEmbeddingTransformer
-import umap
+from pathlib import Path
 import matplotlib.pyplot as plt
 import torch
 import numpy as np
+import umap
+from training.model import PlayerTimelineSummaryModel
 from utils.scrapers import LoLScraper
 from utils.champion import CHAMPION_IDS
 import argparse
 
-parser = argparse.ArgumentParser(description="Visualize champion embeddings using UMAP.")
-parser.add_argument("--checkpoint", type=str, default="training_checkpoints/checkpoint_epoch_5.pth",
+from sklearn.manifold import TSNE
+from sklearn.cluster import KMeans
+
+parser = argparse.ArgumentParser(description="Visualize champion embeddings using t-SNE.")
+parser.add_argument("--checkpoint", type=str, default="timeline_transformer",
                     help="Path to the trained model checkpoint.")
 parser.add_argument("-n", "--neighbors", type=int, default=15,
-                    help="Number of neighbors for UMAP.")
+                    help="(Not used for t-SNE, but kept for compatibility.)")
+parser.add_argument("-e", type=int, default=4,
+                    help="Choose epoch")
+
 args = parser.parse_args()
 
 
 # Define an RGB mapping for each tag.
-# Colors are defined as tuples: (R, G, B) in [0, 255]
 TAG_COLOR_MAP = {
     "Mage": (128, 0, 128),       # Purple
     "Fighter": (255, 0, 0),      # Red
@@ -41,17 +47,20 @@ scrapper = LoLScraper()
 champions_data = scrapper.ddragon.champions.get_all_champions_data()["data"]
 
 # Initialize the model.
-model = ChampionEmbeddingTransformer(
-    feature_dim=159,          # Adjust as needed.
+model = PlayerTimelineSummaryModel(
+    feature_dim=177,
     d_model=256,
     num_champions=200,
-    champion_embedding_dim=128,
+    champion_embedding_dim=16,
+    max_seq_len=70,
     num_layers=4,
     num_heads=8,
     dropout=0.1,
+    num_positions=5
 )
 # Load the saved state dictionary.
-model.load_state_dict(torch.load(args.checkpoint, map_location=torch.device("cpu")))
+checkpoint = Path("checkpoints") / args.checkpoint / f"checkpoint_epoch_{args.e}.pth"
+model.load_state_dict(torch.load(checkpoint, map_location=torch.device("cpu")))
 model.eval()
 
 # Extract champion embeddings.
@@ -75,12 +84,8 @@ for champ_idx in range(170):
     champion_labels.append(champ_name)
     
     # For each tag in champion_tags, get the corresponding color.
-    colors = []
-    for tag in champion_tags:
-        if tag in TAG_COLOR_MAP:
-            colors.append(TAG_COLOR_MAP[tag])
-    # If multiple colors, average them; if none, use default.
-    final_color = average_rgb(colors) if colors else DEFAULT_COLOR
+    # Here we simply take the first tag's color.
+    final_color = TAG_COLOR_MAP.get(champion_tags[0], DEFAULT_COLOR)
     champion_colors.append(final_color)
 
 # Convert RGB tuples to normalized RGB for matplotlib scatter (scale to 0-1).
@@ -126,7 +131,7 @@ for i, label in enumerate(champion_labels):
         ha="center",
         fontsize=8,
     )
-plt.savefig(f"viz/champion_embeddings_umap_nmeans_{n}.png")
+plt.savefig(f"viz/ce_umap_nmeans_{n}.png")
 # Plot champion points with their averaged RGB colors.
 plt.figure(figsize=(10, 8))
 plt.scatter(
@@ -150,4 +155,4 @@ for i, label in enumerate(champion_labels):
         fontsize=8,
     )
 
-plt.savefig(f"viz/champion_embeddings_umap_{n}.png")
+plt.savefig(f"viz/ce_umap_{n}.png")

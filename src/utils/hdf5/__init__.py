@@ -225,14 +225,17 @@ class HDF5Database:
         if not self.is_open:
             raise ValueError("No database file is open.")
         
-        # self.games_file["games"].__delitem__(game_id)
-        # self.frames_file["frames"].__delitem__(game_id)
-        # self.champions_file["champions"].__delitem__(game_id)
-        # self.team_objectives_file["objectives"].__delitem__(game_id)
-        # self.items_file["items"].__delitem__(game_id)
+        self.games_file["games"].__delitem__(game_id)
+        self.frames_file["frames"].__delitem__(game_id)
+        self.champions_file["champions"].__delitem__(game_id)
+        self.team_objectives_file["objectives"].__delitem__(game_id)
+        self.items_file["items"].__delitem__(game_id)
         for player_idx in range(10):
             gpg = self._get_player_group(player_idx)
-            gpg.__delitem__(game_id)
+            if game_id in gpg:
+                gpg.__delitem__(game_id)
+            else:
+                print(f"Player {player_idx} data for game {game_id} not found in the database.")
         
     @staticmethod
     def _pseudo_id_to_game_player_idx(pseudo_id: str) -> Tuple[str, int]:
@@ -401,10 +404,13 @@ class HDF5Database:
         :return: Numpy array of player timeline data.
         """
         self._check_in_db(game_id)
-
+        team = "blue" if player_idx < 5 else "red"
+        all_positions = game_data["blue_positions"] + game_data["red_positions"]
+        
         players_group: h5py.Group = self._check_player_group(game_id, player_idx)        
         all_champions = game_data["blue_champions"] + game_data["red_champions"]
         
+        player_pos = all_positions[player_idx]
         champion_id = all_champions[player_idx]
         player_data = players_data[player_idx]
         
@@ -418,7 +424,8 @@ class HDF5Database:
         ds.attrs["player_champion"] = champion_id
         ds.attrs["game_id"] = game_id
         ds.attrs["player_idx"] = player_idx
-        ds.attrs["team"] = "blue" if player_idx < 5 else "red"
+        ds.attrs["team"] = team
+        ds.attrs["position"] = player_pos
         self._add_metadata(ds, game_data)
         return player_array
     

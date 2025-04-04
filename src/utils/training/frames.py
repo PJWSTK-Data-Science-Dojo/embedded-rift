@@ -15,6 +15,14 @@ a2 = np.log(a * (t0 - 1) / t0) / log_divisor / (t0 ** 2)
 sqrt_denom = 1
 quad_denom = 1
 
+ALL_ROLES = {
+    "TOP",
+    "JUNGLE",
+    "MIDDLE",
+    "BOTTOM",
+    "UTILITY",
+}
+
 def xsqrtx(x: float) -> float:
     """Scales x with a square root function using a precomputed denominator."""
     global sqrt_denom
@@ -51,6 +59,7 @@ def extract_player(
     Extracts a player's frame data as a dictionary and returns it along with the item list.
     Uses precomputed denominators and logarithmic constants.
     """
+
     # Precompute scaled metrics
     visionScore = xsqrtx(frame_index) * player_result.get("visionScore", 0)
     totalHeal = xsqrtx(frame_index) * player_result.get("totalHeal", 0)
@@ -223,7 +232,11 @@ def extract_frames(game_data: Dict[str, Any]) -> Dict[str, Any]:
 
     blue_champions = [p["championId"] for p in blue_result.get("participants", [])]
     red_champions = [p["championId"] for p in red_result.get("participants", [])]
-
+    blue_positions = [p["teamPosition"] for p in blue_result.get("participants", [])]
+    red_positions = [p["teamPosition"] for p in red_result.get("participants", [])]
+    if any(pos not in ALL_ROLES for pos in blue_positions + red_positions):
+        raise ValueError("Invalid team positions found in game data.")
+    
     items_per_frame = []
     objectives_list = []
 
@@ -261,6 +274,8 @@ def extract_frames(game_data: Dict[str, Any]) -> Dict[str, Any]:
         "early_surrender": early_surrender,
         "surrender": surrender,
         "blue_win": blue_result.get("win", False),
+        "blue_positions": blue_positions,
+        "red_positions": red_positions,
         "platform": platform,
         "season": season,
         "patch": patch,
