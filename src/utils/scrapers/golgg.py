@@ -32,13 +32,13 @@ class GolggScraper:
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)",
             }
         )
-        self.playwright = await async_playwright().start()
-        self.browser = await self.playwright.chromium.launch(headless=headless)
+        # self.playwright = await async_playwright().start()
+        # self.browser = await self.playwright.chromium.launch(headless=headless)
         return self
 
     async def stop(self):
-        await self.browser.close()
-        await self.playwright.stop()
+        # await self.browser.close()
+        # await self.playwright.stop()
         if self.client:
             await self.client.aclose()
 
@@ -420,10 +420,43 @@ class GolggScraper:
 
         return games
 
+    async def get_team_players(self, team_id: str) -> list[dict]:
+        """Get the players in a team."""
+        s = f"/teams/team-stats/{team_id}/split-ALL/tournament-ALL/"
+        url = f"{GOLGG_URL}{s}"
+        async with self.semaphore:
+            response = await self.client.get(url)
+
+        html = response.content.decode("utf-8")
+
+        sel = parsel.Selector(text=html)
+        players_table = sel.css(".table_list")[-1]
+        players = players_table.xpath("./tbody/tr")
+        team_players = []
+        for player in players:
+            if len(player.css("td")) < 2:
+                continue
+            if len(team_players) >= 5:
+                break
+            player_tds = player.css("td")
+            role = player_tds[0].css("::text").get().strip()
+            player_link = player_tds[1].css("a")[0]
+            href = player_link.css("::attr(href)").get()
+            player_name = player_link.css("::text").get()
+            player_id = re.search(r"player-stats/(\d+)/", href).group(1)
+            team_players.append(
+                {
+                    "role": role,
+                    "player_id": player_id,
+                    "name": player_name,
+                }
+            )
+        return team_players
+
 
 async def main():
     game_id = "383"
-    match_id = "56264"
+    match_id = "2960"
     async with GolggScraper() as scrapper:
         games = await scrapper.get_games_in_match(match_id=match_id)
         with open("test_games.json", "w") as f:

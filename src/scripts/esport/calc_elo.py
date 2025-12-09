@@ -1,445 +1,603 @@
 import json
-from collections import defaultdict
 from pathlib import Path
+from collections import defaultdict, deque
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import train_test_split
+import pandas as pd
 import numpy as np
-from sklearn.metrics import auc, roc_curve
-from tqdm import tqdm
-from trueskill import Rating, rate
-from openskill.models import PlackettLuce
 import matplotlib.pyplot as plt
-import openskill
-from scipy.stats import norm
-import math
-import csv
+from tqdm import tqdm
+
+from sklearn.ensemble import RandomForestClassifier
+from xgboost import XGBClassifier
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import accuracy_score, recall_score, roc_auc_score, roc_curve, auc
+
 import trueskill
-from utils.rankings._elo import expected_win_elo, update_elo, update_team_elo
+from trueskill import Rating
+from openskill.models import PlackettLuce
+
+# Ranking update utilities
+from utils.rankings._elo import update_team_elo, expected_win_elo
+from utils.rankings._ts import update_trueskill, expected_trueskill_win, team_rating
 from utils.rankings._os import update_openskill
-from utils.rankings._ts import team_rating, update_trueskill, expected_trueskill_win
-import statistics as stat
+from scipy.stats import randint, uniform
 
-model = PlackettLuce()
-elo_ratings = defaultdict(lambda: 1500)
-trueskill_ratings = defaultdict(lambda: Rating())
-openskill_ratings = defaultdict(lambda: model.rating())
-THRESHOLD = 0.5
 trueskill.DRAW_PROBABILITY = 0.0
+elo_ratings = defaultdict(lambda: 1500)
+ts_ratings = defaultdict(lambda: Rating())
+os_model = PlackettLuce()
+os_ratings = defaultdict(lambda: os_model.rating())
+
+IDX_TO_ROLE = {
+    0: "TOP",
+    1: "JUNGLE",
+    2: "MID",
+    3: "ADC",
+    4: "SUPPORT",
+}
 
 
-def plot_roc_auc(y_true, elo_probs, ts_probs, os_probs):
+def predict_match_result(blue_ids, red_ids):
     """
-    Plots ROC curves for three models and prints their AUCs.
+    Given two lists of 5 player IDs each (blue_ids, red_ids), compute:
+      - ELO-based win probability
+      - TrueSkill-based win probability
+      - OpenSkill-based win probability
+    Then pick the team with the highest of these three probabilities as the “predicted winner.”
 
-    y_true:    list of 0/1 true outcomes (1 = team1 won)
-    elo_probs: list of predicted P(team1 wins) from ELO
-    ts_probs:  list of predicted P(team1 wins) from TrueSkill
-    os_probs:  list of predicted P(team1 wins) from OpenSkill
+    Returns a dict with keys:
+      {
+        "elo_prob": p_blue_elo,
+        "ts_prob": p_blue_ts,
+        "os_prob": p_blue_os,
+        "combined_predict": "blue" or "red"
+      }
     """
-    plt.figure(figsize=(8, 6))
-    for probs, name in (
+    # 1) ELO probability
+    avg_elo_blue = np.mean([elo_ratings[player_id] for player_id in blue_ids])
+    avg_elo_red = np.mean([elo_ratings[player_id] for player_id in red_ids])
+    # expected_win_elo(p1, p2) = probability that team1 beats team2
+    p_blue_elo = expected_win_elo(avg_elo_blue, avg_elo_red)
+
+    # 2) TrueSkill probability
+    ts_ratings_blue = [ts_ratings[player_id] for player_id in blue_ids]
+    ts_ratings_red = [ts_ratings[player_id] for player_id in red_ids]
+    p_blue_ts = expected_trueskill_win(ts_ratings_blue, ts_ratings_red)
+
+    # 3) OpenSkill probability
+    os_ratings_blue = [os_ratings[player_id] for player_id in blue_ids]
+    os_ratings_red = [os_ratings[player_id] for player_id in red_ids]
+    p_blue_os, _ = os_model.predict_win([os_ratings_blue, os_ratings_red])
+
+    # Decide which probability is highest
+    probs = {"blue_elo": p_blue_elo, "blue_ts": p_blue_ts, "blue_os": p_blue_os}
+    # Find the rating system that gives the largest probability for “blue” to win
+    best_system = max(probs, key=lambda k: probs[k])
+    # If that best prob > 0.5, predict blue; otherwise predict red.
+    if probs[best_system] > 0.5:
+        winner = "blue"
+    else:
+        winner = "red"
+
+    return {
+        "elo_prob": p_blue_elo,
+        "ts_prob": p_blue_ts,
+        "os_prob": p_blue_os,
+        "combined_predict": winner,
+    }
+
+
+# Plotting utility for ROC curves
+def plot_roc_auc(y_true, xgb_probs, elo_probs, ts_probs, os_probs):
+    plt.figure(figsize=(6, 6))
+    models = [
+        # (rf_probs, "RandomForest"),
+        (xgb_probs, "XGBoost"),
         (elo_probs, "ELO"),
         (ts_probs, "TrueSkill"),
         (os_probs, "OpenSkill"),
-    ):
+    ]
+    for probs, label in models:
+        print(f"Plotting {label} ROC curve...")
         fpr, tpr, _ = roc_curve(y_true, probs)
         model_auc = auc(fpr, tpr)
-        plt.plot(fpr, tpr, lw=2, label=f"{name} (AUC = {model_auc:.3f})")
-
-    # random‐guess line
+        plt.plot(fpr, tpr, lw=2, label=f"{label} (AUC = {model_auc:.3f})")
     plt.plot([0, 1], [0, 1], linestyle="--", color="gray", label="Chance")
-
-    plt.xlim(0, 1)
-    plt.ylim(0, 1.05)
     plt.xlabel("False Positive Rate")
     plt.ylabel("True Positive Rate")
-    plt.title("ROC Curves")
+    plt.title("ROC Curve Comparison")
     plt.legend(loc="lower right")
     plt.grid(True)
+    plt.tight_layout()
     plt.show()
 
 
-def plot_final_ratings(
-    ratings_dict, title, name_map: dict[str, str], top_n=10, getter=lambda r: r
-):
-    ratings = [(p, getter(r)) for p, r in ratings_dict.items()]
-    ratings.sort(key=lambda x: x[1], reverse=True)
-    top_players = ratings[:top_n]
+def process_single_game(game):
+    """
+    Compute pre-game win probabilities for ELO, TrueSkill, OpenSkill,
+    then update each rating system.
+    Returns (p_e, p_t, p_o).
+    """
+    global elo_ratings, ts_ratings, os_model, os_ratings
+    rankings = {}
+    # Extract player IDs
+    t1_ids = [p["player_id"] for p in game["t1_players"].values()]
+    t2_ids = [p["player_id"] for p in game["t2_players"].values()]
 
-    names = [name_map[p] for p, _ in top_players]
-    values = [v for _, v in top_players]
+    # ELO probability
+    elo_ratings1 = [elo_ratings[p] for p in t1_ids]
+    elo_ratings2 = [elo_ratings[p] for p in t2_ids]
 
-    plt.figure(figsize=(10, 6))
-    plt.barh(names[::-1], values[::-1])
-    plt.xlabel("Rating")
-    plt.title(title)
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig(f"viz/{title}.png")
+    avg1 = np.mean(elo_ratings1)
+    avg2 = np.mean(elo_ratings2)
+
+    rankings["elo"] = (avg1, avg2)
+
+    p_e = expected_win_elo(avg1, avg2)
+
+    ts_ratings1 = [ts_ratings[p] for p in t1_ids]
+    ts_ratings2 = [ts_ratings[p] for p in t2_ids]
+    t1_ts_rank = team_rating(ts_ratings1)
+    t2_ts_rank = team_rating(ts_ratings2)
+    rankings["trueskill"] = (t1_ts_rank, t2_ts_rank)
+    # TrueSkill probability
+    p_t = expected_trueskill_win(
+        ts_ratings1,
+        ts_ratings2,
+    )
+
+    # OpenSkill probability
+    os_ratings1 = [os_ratings[p] for p in t1_ids]
+    os_ratings2 = [os_ratings[p] for p in t2_ids]
+    t1_os_rank, t2_os_rank = os_model._calculate_team_ratings(
+        [os_ratings1, os_ratings2]
+    )
+    rankings["openskill"] = (t1_os_rank, t2_os_rank)
+    p_o, _ = os_model.predict_win([os_ratings1, os_ratings2])
+
+    return (p_e, p_t, p_o), rankings
 
 
-def get_id_to_name_mapping(games):
-    mapping = {}
-    for game in games:
-        for role, player in game["t1_players"].items():
-            mapping[player["player_id"]] = player["player_name"]
-        for role, player in game["t2_players"].items():
-            mapping[player["player_id"]] = player["player_name"]
-    return mapping
+def update_rankings(game):
+    # Update ratings based on result
+    global elo_ratings, ts_ratings, os_model, os_ratings
+    rankings = {}
+    # Extract player IDs
+    t1_ids = [p["player_id"] for p in game["t1_players"].values()]
+    t2_ids = [p["player_id"] for p in game["t2_players"].values()]
+
+    result = game.get("t1_win", False)
+
+    elo_ratings1 = [elo_ratings[p] for p in t1_ids]
+    elo_ratings2 = [elo_ratings[p] for p in t2_ids]
+
+    # ELO update
+    new1, new2 = update_team_elo(elo_ratings1, elo_ratings2, result, k=32)
+    for pid, nr in zip(t1_ids + t2_ids, new1 + new2):
+        elo_ratings[pid] = nr
+
+    ts_ratings1 = [ts_ratings[p] for p in t1_ids]
+    ts_ratings2 = [ts_ratings[p] for p in t2_ids]
+    # TrueSkill update
+    nt1, nt2 = update_trueskill(
+        ts_ratings1,
+        ts_ratings2,
+        result,
+    )
+    for pid, nr in zip(t1_ids + t2_ids, nt1 + nt2):
+        ts_ratings[pid] = nr
+
+    os_ratings1 = [os_ratings[p] for p in t1_ids]
+    os_ratings2 = [os_ratings[p] for p in t2_ids]
+    # OpenSkill update
+    o1, o2 = update_openskill(
+        os_ratings1,
+        os_ratings2,
+        result,
+        model=os_model,
+    )
+    for pid, nr in zip(t1_ids + t2_ids, o1 + o2):
+        os_ratings[pid] = nr
 
 
-def get_name_to_id_mapping(games):
-    mapping = {}
-    for game in games:
-        for role, player in game["t1_players"].items():
-            mapping[player["player_name"]] = player["player_id"]
-        for role, player in game["t2_players"].items():
-            mapping[player["player_name"]] = player["player_id"]
-    return mapping
+HISTORY_SIZE = 50
+team_hist = defaultdict(lambda: deque(maxlen=HISTORY_SIZE))
+player_hist = defaultdict(lambda: deque(maxlen=HISTORY_SIZE))
 
 
-def save_ratings(name_map, player_game_count):
-    rating_path = Path("ratings.csv")
-    data = []
-    for p in elo_ratings:
-        player_data = {
-            "player_id": p,
-            "player_name": name_map[p],
-            "games_played": player_game_count[p],
-            "elo_rating": elo_ratings[p],
-            "trueskill_mu": trueskill_ratings[p].mu,
-            "trueskill_sigma": trueskill_ratings[p].sigma,
-            "openskill_mu": openskill_ratings[p].mu,
-            "openskill_sigma": openskill_ratings[p].sigma,
+def get_team_stats(game, features):
+    team_keys = [
+        "kills",
+        "towers",
+        "dragons",
+        "nashors",
+        "gold",
+        "game_duration",
+        "enemy_rank",
+        "won",
+    ]
+    win = int(game["t1_win"])
+    hist = team_hist[game["t1_id"]]
+    for k in team_keys:
+        vals = [float(e[k]) for e in hist if e[k] is not None]
+
+        if not vals:
+            vals = [0.0]
+
+        features[f"t1_{k}_avg"] = float(np.mean(vals)) if vals else 0.0
+
+    hist = team_hist[game["t2_id"]]
+    for k in team_keys:
+        vals = [float(e[k]) for e in hist if e[k] is not None]
+
+        if not vals:
+            vals = [0.0]
+
+        features[f"t2_{k}_avg"] = float(np.mean(vals)) if vals else 0.0
+
+    t1_stats = game["t1_stats"]
+    t2_stats = game["t2_stats"]
+    t1_stats["game_duration"] = game["game_duration"]
+    t2_stats["game_duration"] = game["game_duration"]
+    t1_stats["enemy_rank"] = features["t2_elo"]
+    t2_stats["enemy_rank"] = features["t1_elo"]
+    t1_stats["won"] = win
+    t2_stats["won"] = 1 - win
+    return t1_stats, t2_stats
+
+
+def get_player_stats(game, features):
+    player_keys = [
+        "level",
+        "kills",
+        "deaths",
+        "assists",
+        "cs",
+        "golds",
+        "gold%",
+        "total_damage_to_champion",
+        "gd@15",
+        "csd@15",
+        "xpd@15",
+        "lvld@15",
+        "elo",
+    ]
+
+    t1_players = list(game["t1_players"].values())
+    t2_players = list(game["t2_players"].values())
+    all_players = t1_players + t2_players
+
+    pstats = {}
+
+    for i, player in enumerate(all_players):
+        hist = player_hist[player["player_id"]]
+        rank = elo_ratings[player["player_id"]]
+        stats = player["stats"]
+        stats["elo"] = rank
+        features[f"{i}_elo"] = rank
+        for k in player_keys:
+
+            vals = [float(e[k]) for e in hist if e[k] is not None]
+            if not vals:
+                vals = [0.0]
+            val = float(np.mean(vals)) if vals else 0.0
+
+            features[f"{(i // 5) + 1}_{IDX_TO_ROLE[i%5]}_{k}_avg"] = val
+
+        pstats[player["player_id"]] = stats
+
+    return pstats
+
+
+def process_games(games):
+    """
+    Single-pass: updates ratings and builds features using fixed-position
+    player features and team stats, without manual KDA handling.
+    Returns y_true, elo_probs, ts_probs, os_probs, df.
+    """
+
+    elo_probs, ts_probs, os_probs = [], [], []
+
+    records, y_true = [], []
+    for game in tqdm(games, desc="Processing games"):
+        (p_e, p_t, p_o), rankings = process_single_game(game)
+        elo_probs.append(p_e)
+        ts_probs.append(p_t)
+        os_probs.append(p_o)
+
+        win = int(game["t1_win"])
+        y_true.append(win)
+
+        t1_elo, t2_elo = rankings["elo"]
+        t1_ts_rank, t2_ts_rank = rankings["trueskill"]
+        t1_os_rank, t2_os_rank = rankings["openskill"]
+        feat = {
+            "date": game["date"],
+            "elo_prob": p_e,
+            "ts_prob": p_t,
+            "os_prob": p_o,
+            "t1_elo": t1_elo,
+            "t2_elo": t2_elo,
+            # "t1_ts_mu": t1_ts_rank.mu,
+            # "t1_ts_sigma": t1_ts_rank.sigma,
+            # "t2_ts_mu": t2_ts_rank.mu,
+            # "t2_ts_sigma": t2_ts_rank.sigma,
+            # "t1_os_mu": t1_os_rank.mu,
+            # "t1_os_sigma": np.sqrt(t1_os_rank.sigma_squared),
+            # "t2_os_mu": t2_os_rank.mu,
+            # "t2_os_sigma": np.sqrt(t2_os_rank.sigma_squared),
+            "team1_win": win,
         }
 
-        data.append(player_data)
+        pstats = get_player_stats(game, feat)
+        # Team stats
+        t1_stats, t2_stats = get_team_stats(game, feat)
+        # Rolling player stats by position
 
-    with open(rating_path, "w", newline="") as f:
-        csv_writer = csv.DictWriter(f, fieldnames=data[0].keys(), delimiter=";")
-        csv_writer.writeheader()
-        csv_writer.writerows(data)
+        records.append(feat)
+
+        # Update team and player histories
+        team_hist[game["t1_id"]].append(t1_stats)
+        team_hist[game["t2_id"]].append(t2_stats)
+
+        for pid, player in pstats.items():
+            player_hist[pid].append(pstats[pid])
+
+        update_rankings(game)
+
+    df = pd.DataFrame(records)
+    return np.array(y_true), elo_probs, ts_probs, os_probs, df
 
 
-def count_player_games(games):
+def get_p_name_to_id_map(games) -> dict:
     """
-    Count the number of games each player participated in.
-    Returns a defaultdict mapping player_id -> number of games.
+    Create a mapping from player names to their IDs.
+    This is useful for debugging and understanding the data.
     """
-    game_counter = defaultdict(int)
-    for game in tqdm(games):
-        # Count games for team1 players
-        for role, player in game["t1_players"].items():
-            game_counter[player["player_id"]] += 1
-        # Count games for team2 players
-        for role, player in game["t2_players"].items():
-            game_counter[player["player_id"]] += 1
-    return game_counter
+    p_name_to_id = {}
+    for game in tqdm(games, desc="Building player name to ID map"):
+        for team in ["t1_players", "t2_players"]:
+            for player in game[team].values():
+                p_name_to_id[player["player_name"]] = player["player_id"]
+    return p_name_to_id
 
 
-def plot_rating_diff_histogram(win_diffs, title, filename):
-    plt.figure(figsize=(10, 6))
-    plt.hist(win_diffs, bins=100, alpha=0.6)
-    plt.title(title)
-    plt.xlabel("Rating Difference (T1 - T2)")
-    plt.ylabel("Frequency")
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig(f"viz/{filename}.png")
+GLOBAL_XGB = None
+GLOBAL_SCALER = None
+GLOBAL_FEATURE_NAMES = None
 
 
-def plot_percentage_accuracy(
-    perc_count: defaultdict, perc_sum: defaultdict, num_of_games: int, name: str = "elo"
-):
+def predict_with_xgb(blue_ids, red_ids):
     """
-    Plots a histogram of predicted confidence percentages and the accuracy for each percentage bucket.
-
-    Parameters:
-    - ts_perc_count: dict mapping predicted percentage (float) to count of predictions
-    - ts_perc_sum: dict mapping predicted percentage (float) to count of correct predictions
-    - num_of_games: int total number of predictions
+    Given two lists of 5 player IDs each (blue_ids, red_ids), this function:
+      1) Computes ELO, TrueSkill, OpenSkill win‐probabilities (blue vs. red),
+         plus avg ELO per team (t1_elo, t2_elo).
+      2) Builds a one‐row pd.DataFrame whose columns match GLOBAL_FEATURE_NAMES.
+         All columns not explicitly set below are filled with 0.0.
+      3) Applies GLOBAL_SCALER.transform(...) to that DataFrame.
+      4) Returns XGB’s predicted probability that “blue” wins (a float in [0,1]).
     """
-    # Sort percentage buckets
-    percents = sorted(perc_count.keys())
-    counts = [perc_count[p] / num_of_games for p in percents]
-    accuracies = [perc_sum.get(p, 0) / perc_count[p] for p in percents]
+    # 1) Compute “rating‐system” features exactly as in process_single_game
+    # —————————————————————————
+    # ELO
+    avg_elo_blue = np.mean([elo_ratings[pid] for pid in blue_ids])
+    avg_elo_red = np.mean([elo_ratings[pid] for pid in red_ids])
+    p_blue_elo = expected_win_elo(avg_elo_blue, avg_elo_red)
 
-    # Histogram of counts
-    plt.figure()
-    plt.bar(percents, counts)
-    plt.xlabel("Predicted Percentage")
-    plt.ylabel("% of Population")
-    plt.title(f"Histogram of Predicted Confidence Percentages ({name})")
+    # TrueSkill
+    ts_ratings_blue = [ts_ratings[pid] for pid in blue_ids]
+    ts_ratings_red = [ts_ratings[pid] for pid in red_ids]
+    p_blue_ts = expected_trueskill_win(ts_ratings_blue, ts_ratings_red)
 
-    # Plot of accuracy per percentage
-    plt.figure()
-    plt.plot(percents, accuracies, marker="o")
-    plt.xlabel("Predicted Percentage")
-    plt.ylabel("Accuracy")
-    plt.title(f"Accuracy per Predicted Percentage {name}")
-    plt.ylim(0.45, 1)
-    plt.xlim(50, 100)
+    # OpenSkill
+    os_ratings_blue = [os_ratings[pid] for pid in blue_ids]
+    os_ratings_red = [os_ratings[pid] for pid in red_ids]
+    p_blue_os, _ = os_model.predict_win([os_ratings_blue, os_ratings_red])
 
-    # 5%-interval ticks
-    # plt.xticks(np.arange(50, 101, 5))
-    plt.yticks(np.arange(0.5, 1.01, 0.05))
+    # At this point we have:
+    #   elo_prob = p_blue_elo
+    #   ts_prob  = p_blue_ts
+    #   os_prob  = p_blue_os
+    #   t1_elo   = avg_elo_blue
+    #   t2_elo   = avg_elo_red
+    # —————————————————————————
 
-    # grid on major ticks
-    plt.grid(which="major", linestyle="--", linewidth=0.5)
+    # 2) Build a one‐row dictionary, then turn into DataFrame with exactly GLOBAL_FEATURE_NAMES columns
+    one_row = {col: 0.0 for col in GLOBAL_FEATURE_NAMES}
 
-    # Print overall accuracy
-    total_correct = sum(perc_sum.values())
-    overall_accuracy = total_correct / num_of_games if num_of_games > 0 else 0
-    print(f"Overall accuracy: {overall_accuracy:.2%} ({total_correct}/{num_of_games})")
+    # Fill in the five “rating‐based” columns:
+    one_row["elo_prob"] = float(p_blue_elo)
+    one_row["ts_prob"] = float(p_blue_ts)
+    one_row["os_prob"] = float(p_blue_os)
 
+    one_row["t1_elo"] = float(avg_elo_blue)
+    one_row["t2_elo"] = float(avg_elo_red)
 
-elo_diffs = []
-elo_pred = 0
-count_elo = 0
-elo_perc_count = defaultdict(int)
-elo_perc_sum = defaultdict(int)
+    # (everything else—team rolling‐stats or player rolling‐stats—stays 0.0)
+    df_single = pd.DataFrame([one_row], columns=GLOBAL_FEATURE_NAMES)
 
+    # 3) Scale
+    X_scaled = GLOBAL_SCALER.transform(df_single)
 
-def elo_rating(t1, t2, t1_win):
-    global elo_pred, count_elo
-    r1, r2 = [elo_ratings[p] for p in t1], [elo_ratings[p] for p in t2]
-    t1_avg = sum(r1) / len(r1)
-    t2_avg = sum(r2) / len(r2)
-    t1_win_pred = expected_win_elo(t1_avg, t2_avg)
-    if t1_win_pred > THRESHOLD:
-        elo_pred += 1 if t1_win else 0
-        count_elo += 1
-    elif t1_win_pred < (1 - THRESHOLD):
-        elo_pred += 1 if not t1_win else 0
-        count_elo += 1
-
-    elo_diff = t1_avg - t2_avg
-    elo_diffs.append(elo_diff)
-
-    t1_up, t2_up = update_team_elo(r1, r2, t1_win)
-    for player_id, new_ranking in zip(t1 + t2, t1_up + t2_up):
-        elo_ratings[player_id] = new_ranking
-
-    wp = t1_win_pred
-    tw = t1_win
-    if t1_win_pred < 0.5:
-        wp = 1 - t1_win_pred
-        tw = not t1_win
-    wp1 = round(wp * 100)
-
-    elo_perc_count[wp1] += 1
-    elo_perc_sum[wp1] += 1 if tw else 0
-
-    return t1_win_pred
+    # 4) Predict with XGBoost
+    prob_blue = GLOBAL_XGB.predict_proba(X_scaled)[0, 1]
+    return prob_blue
 
 
-ts_perc_count = defaultdict(int)
-ts_perc_sum = defaultdict(int)
-ts_diffs = []
-ts_pred = 0
-count_ts = 0
+def build_player_name_map(games):
+    """
+    Given a list of game‐dicts (the same structure as your data/games.json),
+    return a dict: { player_id: player_name }.
+
+    If a single player appears under multiple names over time, this will store
+    whichever name appears last in the `games` list. If you want the first‐seen
+    name, just check `if pid not in player_name_map` before assigning.
+    """
+    player_name_map = {}
+
+    for game in games:
+        # Each game has "t1_players" and "t2_players" as dicts of 5 player‐records
+        for side in ("t1_players", "t2_players"):
+            for p in game[side].values():
+                pid = p["player_id"]
+                name = p.get("player_name", "").strip()
+                if name:
+                    # Overwrite with the most recent name seen in the list order
+                    player_name_map[pid] = name
+
+    return player_name_map
 
 
-def ts_rating(t1, t2, t1_win):
-    global ts_pred, count_ts
-    r1, r2 = [trueskill_ratings[p] for p in t1], [trueskill_ratings[p] for p in t2]
-    t1_win_pred = expected_trueskill_win(r1, r2)
+def export_all_player_ratings(output_path="player_ratings.csv"):
+    """
+    Builds a DataFrame with one row per player‐ID, containing:
+      pid, player_name, last_date, elo_rating, ts_mu, ts_sigma, os_mu, os_sigma
+    from the globals:
+      elo_ratings, ts_ratings, os_ratings, player_last_date, player_name_map
+    """
+    rows = []
+    # Collect every pid seen in either ratings‐dict or last_date‐dict:
+    all_pids = set(elo_ratings.keys()) | set(ts_ratings.keys()) | set(os_ratings.keys())
 
-    if t1_win_pred > THRESHOLD:
-        ts_pred += 1 if t1_win else 0
-        count_ts += 1
-    elif t1_win_pred < (1 - THRESHOLD):
-        ts_pred += 1 if not t1_win else 0
-        count_ts += 1
+    for pid in all_pids:
+        # 1) pid and player_name
+        name = player_name_map.get(pid, "")
 
-    ts_mu1, ts_var1 = team_rating(r1)
-    ts_mu2, ts_var2 = team_rating(r2)
-    ts_denom = math.sqrt(len(r1) * trueskill.BETA**2 + ts_var1 + ts_var2)
-    ts_diff = (ts_mu1 - ts_mu2) / ts_denom
+        # 2) last_date (could be empty string if they never appeared in a “game”)
+        # last_dt = player_last_date.get(pid, "")
 
-    ts_diffs.append(ts_diff)
+        # 3) ELO       (default 1500 if never rated)
+        elo_value = elo_ratings.get(pid, 1500.0)
 
-    t1_up, t2_up = update_trueskill(r1, r2, t1_win)
-    for player_id, new_ranking in zip(t1 + t2, t1_up + t2_up):
-        trueskill_ratings[player_id] = new_ranking
+        # 4) TrueSkill → extract mu & sigma
+        ts_r = ts_ratings.get(pid, trueskill.Rating())
+        ts_mu = ts_r.mu
+        ts_sigma = ts_r.sigma
 
-    wp = t1_win_pred
-    tw = t1_win
-    if t1_win_pred < 0.5:
-        wp = 1 - t1_win_pred
-        tw = not t1_win
-    wp1 = round(t1_win_pred * 100)
+        # 5) OpenSkill → extract mu & sigma (or sqrt(sigma_squared))
+        os_r = os_ratings.get(pid, os_model.rating())
+        os_mu = os_r.mu
+        os_sigma = getattr(os_r, "sigma", None)
+        if os_sigma is None:
+            # fallback if only sigma_squared is defined
+            ssq = getattr(os_r, "sigma_squared", None)
+            os_sigma = (ssq**0.5) if (ssq is not None) else None
 
-    ts_perc_count[wp1] += 1
-    ts_perc_sum[wp1] += 1 if tw else 0
+        rows.append(
+            {
+                "pid": pid,
+                "player_name": name,
+                # "last_date": last_dt,
+                "elo_rating": elo_value,
+                "ts_mu": ts_mu,
+                "ts_sigma": ts_sigma,
+                "os_mu": os_mu,
+                "os_sigma": os_sigma,
+            }
+        )
 
-    return t1_win_pred
-
-
-os_diffs = []
-os_pred = 0
-os_perc_count = defaultdict(int)
-os_perc_sum = defaultdict(int)
-count_os = 0
-
-
-def os_rating(t1, t2, t1_win):
-    global os_pred, count_os
-    r1, r2 = [openskill_ratings[p] for p in t1], [openskill_ratings[p] for p in t2]
-    wp1, wp2 = model.predict_win([r1, r2])
-
-    if wp1 > THRESHOLD:
-        os_pred += 1 if t1_win else 0
-        count_os += 1
-    elif wp2 > THRESHOLD:
-        os_pred += 1 if not t1_win else 0
-        count_os += 1
-
-    os_mu1, os_var1 = team_rating(r1)
-    os_mu2, os_var2 = team_rating(r2)
-    os_denom = math.sqrt(len(r1) * model.beta**2 + os_var1 + os_var2)
-    os_diff = (os_mu1 - os_mu2) / os_denom
-    os_diffs.append(os_diff)
-    t1_up, t2_up = update_openskill(r1, r2, t1_win, model=model)
-    for player_id, new_ranking in zip(t1 + t2, t1_up + t2_up):
-        openskill_ratings[player_id] = new_ranking
-
-    wp = wp1
-    tw = t1_win
-    if wp1 < wp2:
-        wp = wp2
-        tw = not t1_win
-
-    max_wp = round(wp * 100)
-    os_perc_count[max_wp] += 1
-    os_perc_sum[max_wp] += 1 if tw else 0
-
-    return wp1
+    df = pd.DataFrame(rows)
+    # (Optional) sort however you like, e.g. by last_date or pid
+    df = df.sort_values("pid")
+    df.to_csv(output_path, index=False)
+    print(f"Exported {len(df)} players to '{output_path}'")
 
 
-def main():
-    global elo_ratings, trueskill_ratings, openskill_ratings
-    global elo_diffs, ts_diffs, os_diffs
-    global elo_pred, ts_pred, os_pred
-    games_path = Path("games.json")
-    if not games_path.exists():
-        print("Games file not found, please download it first.")
-        return
+player_name_map = {}
 
-    with open(games_path, "r") as f:
-        games = json.load(f)
 
-    games = sorted(games, key=lambda g: g["date"])
-    name_map = get_id_to_name_mapping(games)
-    player_game_count = count_player_games(games)
-    y_true = []
-    elo_probs = []
-    ts_probs = []
-    os_probs = []
-    for game in tqdm(games, desc="Processing games"):
-        t1 = [game["t1_players"][role]["player_id"] for role in game["t1_players"]]
-        t2 = [game["t2_players"][role]["player_id"] for role in game["t2_players"]]
-        t1_win = game["t1_win"]
-        t1_name = game["t1_name"]
-        t2_name = game["t2_name"]
+def train_models_from_process(y_train, X_train, y_test, X_test, random_state=42):
+    """
+    Trains LogisticRegression i XGBoost na podanych danych.
+    """
+    # Skalowanie
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
 
-        p_elo = elo_rating(t1, t2, t1_win)
-        p_ts = ts_rating(t1, t2, t1_win)
-        p_os = os_rating(t1, t2, t1_win)
-        y_true.append(1 if t1_win else 0)
+    # Logistic Regression
+    logistic = LogisticRegression(random_state=random_state)
+    logistic.fit(X_train_scaled, y_train)
 
-        elo_probs.append(p_elo)
-        ts_probs.append(p_ts)
-        os_probs.append(p_os)
-        # if abs(elo_diff) > 300 or abs(ts_diff) > 3 or abs(os_diff) > 3:
-        #     print(
-        #         f"Game: {t1_name} vs {t2_name} (Won: {t1_name if t1_win else t2_name}) | Elo diff: {elo_diff:.2f} | TrueSkill diff: {ts_diff:.2f} | OpenSkill diff: {os_diff:.2f}"
-        #     )
-    print("len(y_true)   =", len(y_true))
-    print("len(elo_probs)=", len(elo_probs))
-    print("len(ts_probs) =", len(ts_probs))
-    print("len(os_probs) =", len(os_probs))
-    print(f"Elo prediction accuracy: {elo_pred / count_elo:.2%}")
-    print(f"TrueSkill prediction accuracy: {ts_pred / count_ts:.2%}")
-    print(f"OpenSkill prediction accuracy: {os_pred / count_os:.2%}")
-    print(f"Total Elo games: {count_elo} ({count_elo / len(games) * 100:.2f}%)")
-    print(f"Total TrueSkill games: {count_ts} ({count_ts / len(games) * 100:.2f}%)")
-    print(f"Total OpenSkill games: {count_os} ({count_os / len(games) * 100:.2f}%)")
+    # XGBoost
+    xgb = XGBClassifier(
+        n_estimators=800,
+        max_depth=6,
+        subsample=0.9,
+        colsample_bytree=0.8,
+        learning_rate=0.03,
+        objective="binary:logistic",
+        eval_metric="auc",
+        random_state=random_state,
+    )
+    xgb.fit(X_train_scaled, y_train)
 
-    name_to_id = get_name_to_id_mapping(games)
-    team_1 = "T1 Academy"
-    team_2 = "Nongshim Esports Academy"
-    t1 = ["Haetae", "Vincenzo", "Poby", "Cypher", "Cloud"]
-    t2 = ["Kangin", "Sylvie", "Calix", "Vital", "Crack"]
-    t1 = [name_to_id[name] for name in t1]
-    t2 = [name_to_id[name] for name in t2]
-    r1 = [elo_ratings[p] for p in t1]
-    r2 = [elo_ratings[p] for p in t2]
-    avg_elo1 = sum(r1) / len(r1)
-    avg_elo2 = sum(r2) / len(r2)
-    ep = expected_win_elo(avg_elo1, avg_elo2)
-    print(f"Elo prediction for {team_1} vs {team_2}: {ep:.2f}")
-    r1, r2 = [trueskill_ratings[p] for p in t1], [trueskill_ratings[p] for p in t2]
-    tp = expected_trueskill_win(r1, r2)
-    print(f"TrueSkill prediction for {team_1} vs {team_2}: {tp:.2f}")
-    r1, r2 = [openskill_ratings[p] for p in t1], [openskill_ratings[p] for p in t2]
-    op, _ = model.predict_win([r1, r2])
-    print(f"OpenSkill prediction for {team_1} vs {team_2}: {op:.2f}")
-
-    # Elo final rating chart
-    # plot_final_ratings(elo_ratings, "Top 10 Final Elo Ratings", name_map)
-
-    # # TrueSkill mu chart
-    # plot_final_ratings(
-    #     trueskill_ratings,
-    #     "Top 10 Final TrueSkill Ratings",
-    #     name_map,
-    #     getter=lambda r: r.mu - 3 * r.sigma,
-    # )
-
-    # # OpenSkill mu chart
-    # plot_final_ratings(
-    #     openskill_ratings,
-    #     "Top 10 Final OpenSkill Ratings",
-    #     name_map,
-    #     getter=lambda r: r.mu - 3 * r.sigma,
-    # )
-    plot_roc_auc(y_true, elo_probs, ts_probs, os_probs)
-    # plot_percentage_accuracy(elo_perc_count, elo_perc_sum, len(games), "elo")
-    # plot_percentage_accuracy(ts_perc_count, ts_perc_sum, len(games), "ts")
-    # plot_percentage_accuracy(os_perc_count, os_perc_sum, len(games), "os")
-    plt.show()
-
-    # mean = stat.mean(elo_diffs)
-    # std = stat.stdev(elo_diffs)
-    # # estymacja sigma pełnego rozkładu
-    # sigma_hat = mean * math.sqrt(math.pi / 2)
-
-    # # teoretyczne parametry half-normal
-    # mean_theoretical = sigma_hat * math.sqrt(2 / math.pi)
-    # std_theoretical = sigma_hat * math.sqrt(1 - 2 / math.pi)
-
-    # print("Estimated full-normal σ:", sigma_hat)
-    # print("Half-normal theoretical mean:", mean_theoretical)
-    # print("Half-normal theoretical std:", std_theoretical)
-    # plot_rating_diff_histogram(
-    #     elo_diffs,
-    #     "Elo Rating Difference Histogram",
-    #     "elo_rating_diff",
-    # )
-    # plot_rating_diff_histogram(
-    #     ts_diffs,
-    #     "TrueSkill Mu Difference Histogram",
-    #     "trueskill_diff",
-    # )
-    # plot_rating_diff_histogram(
-    #     os_diffs,
-    #     "OpenSkill Mu Difference Histogram",
-    #     "openskill_diff",
-    # )
-    # plt.show()
-
-    save_ratings(name_map, player_game_count)
+    return logistic, xgb, scaler
 
 
 if __name__ == "__main__":
-    main()
+    # Wczytaj dane
+    data_path = Path("data/games.json")
+    if not data_path.exists():
+        raise FileNotFoundError("data/games.json not found")
+    with open(data_path) as f:
+        games = json.load(f)
+
+    # Przetworzenie gier na cechy i prawdziwe wyniki
+    y_true, elo_probs, ts_probs, os_probs, df = process_games(games)
+    print(f"Processed {len(df)} games, {len(df.columns)} features.")
+
+    # Przygotowanie macierzy cech
+    X = df.drop(columns=["date", "team1_win"]).fillna(0.0).values
+    y = np.array(y_true)
+    elo_arr = np.array(elo_probs)
+    ts_arr = np.array(ts_probs)
+    os_arr = np.array(os_probs)
+
+    # Split ze wspólnym indeksem
+    indices = np.arange(len(y))
+    train_idx, test_idx = train_test_split(
+        indices, test_size=0.2, random_state=42, shuffle=True
+    )
+
+    X_train, X_test = X[train_idx], X[test_idx]
+    y_train, y_test = y[train_idx], y[test_idx]
+
+    # Trenuj modele na cechach
+    log_reg, xgb_clf, scaler = train_models_from_process(
+        y_train, X_train, y_test, X_test
+    )
+
+    # Ewaluacja wszystkich metod
+    methods = {
+        "LogisticRegression": log_reg.predict_proba(scaler.transform(X_test))[:, 1],
+        "XGBoost": xgb_clf.predict_proba(scaler.transform(X_test))[:, 1],
+        "ELO": elo_arr[test_idx],
+        "TrueSkill": ts_arr[test_idx],
+        "OpenSkill": os_arr[test_idx],
+    }
+
+    for name, probs in methods.items():
+        preds = (probs > 0.5).astype(int)
+        acc = accuracy_score(y_test, preds)
+        recall = recall_score(y_test, preds)
+        auc_score = roc_auc_score(y_test, probs)
+        print(
+            f"{name}: Accuracy = {acc:.2%}, Recall = {recall:.2%}, AUC = {auc_score:.3f}"
+        )
+
+    # Plot ROC curves
+    plt.figure(figsize=(8, 8))
+    for probs, label in [(methods[m], m) for m in methods]:
+        fpr, tpr, _ = roc_curve(y_test, probs)
+        auc_val = auc(fpr, tpr)
+        plt.plot(fpr, tpr, lw=2, label=f"{label} (AUC={auc_val:.3f})")
+    plt.plot([0, 1], [0, 1], linestyle="--", color="gray", label="Chance")
+    plt.xlabel("False Positive Rate")
+    plt.ylabel("True Positive Rate")
+    plt.title("ROC Curve Comparison")
+    plt.legend(loc="lower right")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()

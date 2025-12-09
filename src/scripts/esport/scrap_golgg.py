@@ -55,6 +55,8 @@ async def get_games(matches, games_path: Path) -> list[dict]:
     with open(games_path, "w") as f:
         json.dump(all_games, f, indent=4)
 
+    return all_games
+
 
 async def main():
     tournaments_path = Path("data/tournaments.json")
@@ -63,45 +65,51 @@ async def main():
     # if tournaments_path.exists():
     #     print("Tournaments already downloaded, skipping...")
     #     return
-    tournaments = []
-    matches = []
-    if tournaments_path.exists():
-        with open(tournaments_path, "r") as f:
-            tournaments = json.load(f)
+    # tournaments = []
+    # matches = []
+    # if tournaments_path.exists():
+    #     with open(tournaments_path, "r") as f:
+    #         tournaments = json.load(f)
 
-    if matches_path.exists():
-        with open(matches_path, "r") as f:
-            matches = json.load(f)
+    # if matches_path.exists():
+    #     with open(matches_path, "r") as f:
+    #         matches = json.load(f)
 
-    if not tournaments and not matches:
-        async with GolggScraper(max_pages=3) as scrapper:
-            tournaments = await scrapper.get_all_tournaments()
+    # if not tournaments and not matches:
+    async with GolggScraper(max_pages=3) as scrapper:
+        tournaments = await scrapper.get_tournaments_in_season(15)
 
-            with open(tournaments_path, "w") as f:
-                json.dump(tournaments, f, indent=4)
+        mean = statistics.mean([int(t["nbgames"]) for t in tournaments])
+        median = statistics.median([int(t["nbgames"]) for t in tournaments])
+        accumulated = sum([int(t["nbgames"]) for t in tournaments])
+        minimum = min([int(t["nbgames"]) for t in tournaments])
+        maximum = max([int(t["nbgames"]) for t in tournaments])
+        is_nan = any([int(t["nbgames"]) == float("nan") for t in tournaments])
 
-            mean = statistics.mean([int(t["nbgames"]) for t in tournaments])
-            median = statistics.median([int(t["nbgames"]) for t in tournaments])
-            accumulated = sum([int(t["nbgames"]) for t in tournaments])
-            minimum = min([int(t["nbgames"]) for t in tournaments])
-            maximum = max([int(t["nbgames"]) for t in tournaments])
-            is_nan = any([int(t["nbgames"]) == float("nan") for t in tournaments])
+        print("Tournaments saved to tournaments.json")
+        print("Total tournaments:", len(tournaments))
+        print("Mean number of games:", mean)
+        print("Median number of games:", median)
+        print("Total number of games:", accumulated)
+        print("Minimum number of games:", minimum)
+        print("Maximum number of games:", maximum)
+        print("Contains NaN:", is_nan)
 
-            print("Tournaments saved to tournaments.json")
-            print("Total tournaments:", len(tournaments))
-            print("Mean number of games:", mean)
-            print("Median number of games:", median)
-            print("Total number of games:", accumulated)
-            print("Minimum number of games:", minimum)
-            print("Maximum number of games:", maximum)
-            print("Contains NaN:", is_nan)
+        matches = await get_tournament_matches(scrapper, tournaments=tournaments)
+        with open(matches_path, "w") as f:
+            json.dump(matches, f, indent=4)
 
-            matches = await get_tournament_matches(scrapper, tournaments=tournaments)
-            with open(matches_path, "w") as f:
-                json.dump(matches, f, indent=4)
+        print("Matches saved to matches.json")
+        print("Total matches:", len(matches))
 
-            print("Matches saved to matches.json")
-            print("Total matches:", len(matches))
+    saved_games = []
+    if games_path.exists():
+        with open(games_path, "r") as f:
+            saved_games = json.load(f)
+
+    saved_match_ids = {game["match_id"] for game in saved_games}
+
+    matches = [m for m in matches if m["match_id"] not in saved_match_ids]
 
     games = await get_games(matches, games_path)
 
@@ -118,9 +126,9 @@ async def main():
             new_mgames.append(game)
 
         updated_games.extend(new_mgames)
-
+    saved_games.extend(updated_games)
     with open(games_path, "w") as f:
-        json.dump(updated_games, f, indent=4)
+        json.dump(saved_games, f, indent=4)
 
 
 if __name__ == "__main__":
