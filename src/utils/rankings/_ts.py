@@ -9,7 +9,7 @@ def team_rating(team):
     return Rating(mu=team_mu, sigma=sqrt(team_sigma_squared))
 
 
-def expected_trueskill_win(team1, team2):
+def expected_trueskill_win(team1: list[Rating], team2: list[Rating]):
     t1_rank = team_rating(team1)
     t2_rank = team_rating(team2)
     delta_mu = t1_rank.mu - t2_rank.mu

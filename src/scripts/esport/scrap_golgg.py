@@ -65,8 +65,8 @@ async def main():
     # if tournaments_path.exists():
     #     print("Tournaments already downloaded, skipping...")
     #     return
-    # tournaments = []
-    # matches = []
+    tournaments = []
+    matches = []
     # if tournaments_path.exists():
     #     with open(tournaments_path, "r") as f:
     #         tournaments = json.load(f)
@@ -77,7 +77,7 @@ async def main():
 
     # if not tournaments and not matches:
     async with GolggScraper(max_pages=3) as scrapper:
-        tournaments = await scrapper.get_tournaments_in_season(15)
+        tournaments = await scrapper.get_all_tournaments()
 
         mean = statistics.mean([int(t["nbgames"]) for t in tournaments])
         median = statistics.median([int(t["nbgames"]) for t in tournaments])
@@ -102,33 +102,33 @@ async def main():
         print("Matches saved to matches.json")
         print("Total matches:", len(matches))
 
-    saved_games = []
-    if games_path.exists():
-        with open(games_path, "r") as f:
-            saved_games = json.load(f)
+    # saved_games = []
+    # if games_path.exists():
+    #     with open(games_path, "r") as f:
+    #         saved_games = json.load(f)
 
-    saved_match_ids = {game["match_id"] for game in saved_games}
+    # saved_match_ids = {game["match_id"] for game in saved_games}
 
-    matches = [m for m in matches if m["match_id"] not in saved_match_ids]
+    # matches = [m for m in matches if m["match_id"] not in saved_match_ids]
 
-    games = await get_games(matches, games_path)
+    # games = await get_games(matches, games_path)
 
-    updated_games = []
-    for match in stqdm(matches):
-        new_mgames = []
-        for game in games:
-            if game["match_id"] != match["match_id"]:
-                continue
+    # updated_games = []
+    # for match in stqdm(matches):
+    #     new_mgames = []
+    #     for game in games:
+    #         if game["match_id"] != match["match_id"]:
+    #             continue
 
-            game["date"] = match["date"]
+    #         game["date"] = match["date"]
 
-            game["tournament"] = match["tournament_name"]
-            new_mgames.append(game)
+    #         game["tournament"] = match["tournament_name"]
+    #         new_mgames.append(game)
 
-        updated_games.extend(new_mgames)
-    saved_games.extend(updated_games)
-    with open(games_path, "w") as f:
-        json.dump(saved_games, f, indent=4)
+    #     updated_games.extend(new_mgames)
+    # saved_games.extend(updated_games)
+    # with open(games_path, "w") as f:
+    #     json.dump(saved_games, f, indent=4)
 
 
 if __name__ == "__main__":

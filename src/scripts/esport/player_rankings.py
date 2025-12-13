@@ -544,6 +544,13 @@ if __name__ == "__main__":
     with open(data_path) as f:
         games = json.load(f)
 
+    start_date = "2020-01-01"
+    games = [
+        g
+        for g in tqdm(games, desc="Filtering games by date")
+        if g["date"] >= start_date
+    ]
+    print(f"Loaded {len(games)} games from {start_date} onwards.")
     # Przetworzenie gier na cechy i prawdziwe wyniki
     y_true, elo_probs, ts_probs, os_probs, df = process_games(games)
     print(f"Processed {len(df)} games, {len(df.columns)} features.")
