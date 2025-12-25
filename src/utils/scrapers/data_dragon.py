@@ -82,7 +82,6 @@ class DataDragonItemAPI(APIHandler):
 
 class DataDragonAPI:
     def __init__(self):
-        super().__init__(rate_limit=30, rate_window=30)
         self.cache = {}
         self.champions = DataDragonChampionAPI()
         self.items = DataDragonItemAPI()
