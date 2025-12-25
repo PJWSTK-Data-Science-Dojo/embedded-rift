@@ -1,6 +1,7 @@
 from . import data_dragon
 from .wiki import WikiScraper
 from .sts_betting import STSBettingAPI
+from .superbet_betting import SuperbetBettingAPI
 from . import _utils
 import json
 
@@ -10,6 +11,7 @@ class LoLScraper:
         self.ddragon = data_dragon.DataDragonAPI()
         self.wiki = WikiScraper()
         self.betting = STSBettingAPI()
+        self.betting_superbet = SuperbetBettingAPI()
 
     def get_champions_names(self, patch: str = data_dragon.PATCH) -> list[str]:
         return self.ddragon.champions.all_champions_names(patch)
@@ -87,3 +89,24 @@ class LoLScraper:
             BettingMarket for the specified type, or None if not available
         """
         return match.markets.get(market_type)
+
+    def get_betting_matches_superbet(self) -> list[_utils.BettingMatch]:
+        """
+        Get all available League of Legends betting matches from Superbet.pl.
+
+        Returns:
+            List of BettingMatch dataclass instances with betting odds
+        """
+        return self.betting_superbet.get_matches_structured()
+
+    def get_match_odds_superbet(self, match: _utils.BettingMatch) -> _utils.BettingMarket:
+        """
+        Get moneyline odds for a match from Superbet.
+
+        Args:
+            match: BettingMatch dataclass
+
+        Returns:
+            BettingMarket for match winner, or None if not available
+        """
+        return self.betting_superbet.get_match_moneyline(match)
