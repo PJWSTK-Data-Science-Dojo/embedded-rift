@@ -148,12 +148,9 @@ class SuperbetBettingAPI:
 
             # Create BettingOdds object
             betting_odd = BettingOdds(
-                id_oppty=odd_data.get("outcomeId", 0),
-                oppty_type=market_id,
                 outcome=odd_data.get("name", ""),
                 odds=float(odd_data.get("price", 1.0)),
                 is_active=odd_data.get("status") == "active",
-                outcome_id=odd_data.get("outcomeId"),
             )
 
             market_groups[market_type].append(betting_odd)

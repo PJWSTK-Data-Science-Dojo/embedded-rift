@@ -154,12 +154,9 @@ STS_MARKET_TYPES = {
 @dataclass(slots=True, frozen=True)
 class BettingOdds:
     """Individual betting outcome/odds for a specific result"""
-    id_oppty: int
-    oppty_type: int
     outcome: str
     odds: float
     is_active: bool
-    outcome_id: Optional[int] = None
 
     @classmethod
     def from_dict(cls, data: dict) -> Self:
