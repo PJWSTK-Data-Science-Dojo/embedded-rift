@@ -8,6 +8,7 @@ import os
 import resource
 import sys
 import time
+from contextlib import aclosing
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -21,6 +22,9 @@ from utils.scrapers.golgg import GolggScraper
 
 ROLES = {"TOP", "JUNGLE", "MID", "ADC", "SUPPORT"}
 SCHEMA_VERSION = 1
+RETRY_DELAYS = (2, 5, 10)
+MAX_CONSECUTIVE_FETCH_ERRORS = 20
+RETRYABLE_FETCH_ERRORS = (httpx.NetworkError, httpx.TimeoutException, httpx.RemoteProtocolError)
 
 
 def timestamp():
@@ -213,6 +217,7 @@ class CollectionStore:
         self.output_path = output_path.resolve()
         self.manifest_path = self.output_path.with_suffix(".manifest.json")
         self.quarantine_path = self.output_path.with_suffix(".quarantine.json")
+        self.errored_path = self.output_path.with_suffix(".errored.json")
         self.journal_path = self.output_path.with_suffix(".journal.jsonl")
         self.records = {}
         self.unplayed = {}
@@ -220,15 +225,11 @@ class CollectionStore:
         self.config = config
         self.created_at = timestamp()
         self.generation = 1
-        self.previous_status = None
-        paths = (self.output_path, self.manifest_path, self.quarantine_path, self.journal_path)
+        paths = (self.output_path, self.manifest_path, self.quarantine_path, self.errored_path, self.journal_path)
         if any(path.exists() for path in paths):
             if not resume or not self.journal_path.exists():
                 raise ValueError("refusing existing/unowned output; choose a new --output-path or --resume an owned journal")
             self._replay()
-            if self.manifest_path.exists():
-                manifest = json.loads(self.manifest_path.read_text())
-                self.previous_status = manifest.get("status")
         else:
             if resume:
                 raise ValueError("--resume requires an existing owned collection journal")
@@ -281,7 +282,7 @@ class CollectionStore:
             raise ValueError("cannot persist a discovered match without its ID")
         old = self.records.get(mid, {})
         record = {"match_id": mid, "status": status, "match": match, "reasons": reasons,
-                  "attempts": old.get("attempts", 0) + (status in {"clean", "unresolved"}),
+                  "attempts": old.get("attempts", 0) + (status in {"clean", "unresolved", "errored"}),
                   "generation": self.generation, "updated_at": timestamp()}
         self._append({"op": "match", "record": record})
         self.records[mid] = record
@@ -309,7 +310,7 @@ class CollectionStore:
 
     def checkpoint(self, status):
         counts = {"discovered_matches": len(self.records), "clean_matches": 0,
-                  "unresolved_matches": 0, "pending_matches": 0, "clean_games": 0,
+                  "unresolved_matches": 0, "errored_matches": 0, "pending_matches": 0, "clean_games": 0,
                   "unplayed_matches": len(self.unplayed),
                   "discovery_failures": sum(item["status"] != "complete" for item in self.discovery.values()),
                   "malformed_source_rows": sum(len(item.get("malformed_rows", [])) for item in self.discovery.values())}
@@ -318,21 +319,25 @@ class CollectionStore:
             if record["status"] == "clean":
                 counts["clean_games"] += len(record["match"]["games"])
         atomic_json(self.output_path, rows=(record["match"] for record in self.records.values() if record["status"] == "clean"))
-        atomic_json(self.quarantine_path, rows=(record for record in self.records.values() if record["status"] != "clean"))
+        atomic_json(self.quarantine_path, rows=(record for record in self.records.values() if record["status"] == "unresolved"))
+        atomic_json(self.errored_path, rows=(record for record in self.records.values() if record["status"] == "errored"))
         manifest = {"schema_version": SCHEMA_VERSION, "status": status, "created_at": self.created_at,
                     "updated_at": timestamp(), "generation": self.generation, "config": self.config,
                     "counts": counts, "discovery": self.discovery,
                     "unplayed": self.unplayed,
                     "output_path": str(self.output_path), "quarantine_path": str(self.quarantine_path),
+                    "errored_path": str(self.errored_path),
+                    "fetch_policy": {"retry_delays_seconds": RETRY_DELAYS,
+                                     "max_consecutive_errors": MAX_CONSECUTIVE_FETCH_ERRORS},
                     "journal_path": str(self.journal_path), "journal_authoritative": True,
                     "peak_rss_mib": round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 1),
                     "completeness": {"all_discovered_ids_accounted": True,
-                                     "all_discovered_series_clean": not (counts["unresolved_matches"] or counts["pending_matches"]),
+                                     "all_discovered_series_clean": counts["clean_matches"] == counts["discovered_matches"],
                                      "discovery_complete": status in {"complete", "incomplete"} and not counts["discovery_failures"],
                                      "point_in_time_training_evidence": False}}
         atomic_json(self.manifest_path, manifest)
         print(f"[{status}] discovered={counts['discovered_matches']} clean={counts['clean_matches']} "
-              f"pending={counts['pending_matches']} unresolved={counts['unresolved_matches']} "
+              f"pending={counts['pending_matches']} errored={counts['errored_matches']} unresolved={counts['unresolved_matches']} "
               f"discovery_failures={counts['discovery_failures']} games={counts['clean_games']} "
               f"peak_rss_mib={manifest['peak_rss_mib']}", flush=True)
         return manifest
@@ -392,6 +397,7 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-path", type=Path, required=True, help="New absolute JSON path; never an existing dataset")
     parser.add_argument("--resume", action="store_true", help="Recover this collector's owned journal")
+    parser.add_argument("--new-generation", action="store_true", help="Explicitly invalidate prior maps/discovery when resuming with refresh/refetch")
     parser.add_argument("--concurrency", type=int, default=4, help="Maximum active series")
     parser.add_argument("--map-concurrency", "--max-pages", dest="max_pages", type=int, default=4, help="Maximum parser HTTP requests")
     parser.add_argument("--tournament-concurrency", type=int, default=2)
@@ -419,6 +425,8 @@ def parse_args(argv=None):
         parser.error("--match-source requires --match-id")
     if args.match_id and not (args.match_source or args.tournament or args.resume):
         parser.error("--match-id requires --tournament, --match-source, or an owned --resume journal")
+    if args.new_generation and not (args.resume and (args.refresh_matches or args.refetch_games)):
+        parser.error("--new-generation requires --resume and --refresh-matches or --refetch-games")
     return args
 
 
@@ -431,8 +439,8 @@ async def collect(args, scraper, corrections):
               "archive_dir": str(args.archive_dir.resolve()) if args.archive_dir else None,
               "refresh_matches": args.refresh_matches, "refetch_games": args.refetch_games}
     store = CollectionStore(args.output_path, args.resume, config)
-    # Interrupted/incomplete generations reuse only maps already reconciled in that generation.
-    if store.previous_status == "complete" and (args.refresh_matches or args.refetch_games):
+    # Resume never invalidates reconciled maps, even after a completed collection.
+    if args.new_generation:
         store.new_generation()
     target = str(args.match_id) if args.match_id else None
     for mid, record in list(store.records.items()):
@@ -454,8 +462,9 @@ async def collect(args, scraper, corrections):
             previous = store.records.get(mid)
             raw = dict(row.get("source_header", row))
             raw.pop("games", None)
-            if previous and previous["status"] == "clean":
-                old_header = previous["match"].get("source_header", {})
+            if previous:
+                old_header = dict(previous["match"].get("source_header", previous["match"]))
+                old_header.pop("games", None)
                 if old_header == raw:
                     continue
             store.put(raw, "pending", ["awaiting complete fresh maps"])
@@ -531,7 +540,8 @@ async def collect(args, scraper, corrections):
         if target and target not in store.records:
             store.put({"match_id": target}, "unresolved", ["target not found in supplied source/tournament"])
         store.checkpoint("running")
-        pending = [mid for mid, record in store.records.items() if record["status"] != "clean" and (not target or target == mid)]
+        pending = [mid for mid, record in store.records.items()
+                   if record["status"] in {"pending", "errored"} and (not target or target == mid)]
 
         async def fetch(mid):
             raw = dict(store.records[mid]["match"].get("source_header", store.records[mid]["match"]))
@@ -543,21 +553,48 @@ async def collect(args, scraper, corrections):
                 raw["games"] = games
                 return raw, [f"{type(error).__name__}: {error}"]
 
-        completed = 0
-        async for mid, row, error in bounded_results(pending, fetch, args.concurrency):
-            if error is not None:
-                raise_for_source_outage(error)
-                raw = dict(store.records[mid]["match"].get("source_header", store.records[mid]["match"]))
-                raw.pop("games", None)
-                store.put(raw, "unresolved", [f"{type(error).__name__}: {error}"])
-            else:
-                match, reasons = row
-                store.put(match, "unresolved" if reasons else "clean", reasons)
-            completed += 1
-            reasons = store.records[mid]["reasons"]
-            print(f"Maps {completed}/{len(pending)} match={mid} status={store.records[mid]['status']}"
-                  + (f" reasons={'; '.join(reasons)}" if reasons else ""), flush=True)
-            if completed % args.batch_size == 0:
+        consecutive_errors = 0
+        for round_index, delay in enumerate((0, *RETRY_DELAYS), start=1):
+            if not pending:
+                break
+            if delay:
+                print(f"Retry round {round_index}: {len(pending)} errored series after {delay}s rest", flush=True)
+                await asyncio.sleep(delay)
+            completed = 0
+            async with aclosing(bounded_results(pending, fetch, args.concurrency)) as results:
+                async for mid, row, error in results:
+                    if error is not None:
+                        raw = dict(store.records[mid]["match"].get("source_header", store.records[mid]["match"]))
+                        raw.pop("games", None)
+                        reasons = [f"{type(error).__name__}: {error}"]
+                        if isinstance(error, httpx.HTTPError):
+                            try:
+                                request = error.request
+                            except RuntimeError:
+                                pass  # Manually raised HTTP errors can lack request metadata.
+                            else:
+                                reasons.append(f"{request.method} {request.url}")
+                            store.put(raw, "errored", reasons)
+                            if not isinstance(error, RETRYABLE_FETCH_ERRORS):
+                                raise_for_source_outage(error)
+                            consecutive_errors += 1
+                            if consecutive_errors >= MAX_CONSECUTIVE_FETCH_ERRORS:
+                                raise error
+                        else:
+                            consecutive_errors = 0
+                            store.put(raw, "unresolved", reasons)
+                    else:
+                        consecutive_errors = 0
+                        match, reasons = row
+                        store.put(match, "unresolved" if reasons else "clean", reasons)
+                    completed += 1
+                    reasons = store.records[mid]["reasons"]
+                    print(f"Maps round={round_index} {completed}/{len(pending)} match={mid} status={store.records[mid]['status']}"
+                          + (f" reasons={'; '.join(reasons)}" if reasons else ""), flush=True)
+                    if completed % args.batch_size == 0:
+                        store.checkpoint("running")
+            pending = [mid for mid in pending if store.records[mid]["status"] == "errored"]
+            if pending and round_index <= len(RETRY_DELAYS):
                 store.checkpoint("running")
         incomplete = any(record["status"] != "clean" for record in store.records.values()) or any(item["status"] != "complete" for item in store.discovery.values())
         store.checkpoint("incomplete" if incomplete else "complete")

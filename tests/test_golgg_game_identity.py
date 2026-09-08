@@ -151,3 +151,37 @@ def test_failed_series_settles_all_map_requests_before_returning(failure):
             assert cancelled == blocked
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("failure", ["disconnect", "rate_limit"])
+def test_failed_map_is_not_retried_inside_a_collection_round(failure, monkeypatch):
+    requests = []
+
+    async def sleep(delay):
+        pass
+
+    monkeypatch.setattr(_MODULE.asyncio, "sleep", sleep)
+
+    async def run():
+        def respond(request):
+            if "page-summary" in request.url.path:
+                return httpx.Response(200, text=(
+                    '<div id="gameMenuToggler"><li><a href="../game/stats/101/page-game/">Game 1</a></li></div>'
+                    '<div class="col-cadre"><div>BO1</div><div>WIN</div></div>'
+                ))
+            if "page-game" in request.url.path:
+                requests.append(str(request.url))
+                if failure == "disconnect":
+                    raise httpx.RemoteProtocolError("server disconnected", request=request)
+                return httpx.Response(429)
+            return httpx.Response(200, text='<table class="completestats"></table>')
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+            scraper = GolggScraper()
+            scraper.client = client
+            expected = httpx.RemoteProtocolError if failure == "disconnect" else httpx.HTTPStatusError
+            with pytest.raises(expected):
+                await scraper.get_games_in_match("101")
+
+    asyncio.run(run())
+    assert requests == ["https://gol.gg/game/stats/101/page-game/"]

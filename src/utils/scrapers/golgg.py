@@ -16,7 +16,6 @@ INDEX_TO_ROLE = {
     3: "ADC",
     4: "SUPPORT",
 }
-GAME_FETCH_RETRIES = 3
 
 
 async def _gather_owned(*coroutines):
@@ -522,17 +521,10 @@ class GolggScraper:
         source_best_of = int(next(iter(formats)))
 
         async def process_game(game_id: str) -> dict:
-            for attempt in range(1, GAME_FETCH_RETRIES + 1):
-                try:
-                    game_page_sel, pstats = await _gather_owned(
-                        self.get_game_selector(game_id),
-                        self.get_players_stats(game_id=game_id),
-                    )
-                    break
-                except httpx.HTTPError:
-                    if attempt == GAME_FETCH_RETRIES:
-                        raise
-                    await asyncio.sleep(attempt)
+            game_page_sel, pstats = await _gather_owned(
+                self.get_game_selector(game_id),
+                self.get_players_stats(game_id=game_id),
+            )
             identity = self._game_identity(game_page_sel, game_id)
             tstats = await self.get_team_stats(game_sel=game_page_sel, game_id=game_id)
             players = await self.get_players_in_game(game_sel=game_page_sel, game_id=game_id)

@@ -161,7 +161,7 @@ def test_refetch_generation_removes_previously_clean_maps_when_source_now_fails(
     scraper = Scraper()
     assert asyncio.run(MODULE.collect(MODULE.parse_args(argv), scraper, {})) == 0
     scraper.broken = True
-    assert asyncio.run(MODULE.collect(MODULE.parse_args(argv + ["--resume"]), scraper, {})) == 2
+    assert asyncio.run(MODULE.collect(MODULE.parse_args(argv + ["--resume", "--new-generation"]), scraper, {})) == 2
     assert json.loads(output.read_text()) == []
     unresolved = json.loads(output.with_suffix(".quarantine.json").read_text())
     assert unresolved[0]["match_id"] == "1"
@@ -284,7 +284,6 @@ def test_resume_excludes_source_confirmed_unplayed_row_without_losing_its_proven
     scraper.corrected = True
     assert asyncio.run(MODULE.collect(MODULE.parse_args(argv + ["--resume"]), scraper, {})) == 0
     assert asyncio.run(MODULE.collect(MODULE.parse_args(argv + ["--resume"]), scraper, {})) == 0
-    assert scraper.calls.count("2") == 1
     assert {row["match_id"] for row in json.loads(output.read_text())} == {"1"}
     assert json.loads(output.with_suffix(".quarantine.json").read_text()) == []
     manifest = json.loads(output.with_suffix(".manifest.json").read_text())
@@ -317,7 +316,7 @@ def test_source_outage_interrupts_without_consuming_remaining_work(tmp_path, sta
 
         async def get_games_in_match(self, mid):
             calls.append(("maps", mid))
-            raise httpx.ReadTimeout("source stalled")
+            httpx.Response(429, request=httpx.Request("GET", "https://gol.gg/")).raise_for_status()
 
     with pytest.raises(httpx.HTTPError):
         asyncio.run(MODULE.collect(args, Scraper(), {}))
@@ -326,7 +325,8 @@ def test_source_outage_interrupts_without_consuming_remaining_work(tmp_path, sta
     assert manifest["status"] == "interrupted"
     assert manifest["counts"]["unresolved_matches"] == 0
     if stage == "maps":
-        assert manifest["counts"]["pending_matches"] == 2
+        assert manifest["counts"]["pending_matches"] == 1
+        assert manifest["counts"]["errored_matches"] == 1
 
 
 def test_concurrent_requests_observe_global_minimum_interval(monkeypatch):
@@ -352,3 +352,148 @@ def test_concurrent_requests_observe_global_minimum_interval(monkeypatch):
 
     asyncio.run(run())
     assert sent_at == [0.0, 1.0, 2.0]
+
+
+def test_retry_rounds_shrink_and_resume_skips_clean_and_quarantined_series(tmp_path, monkeypatch):
+    output = tmp_path / "history.json"
+    argv = ["--output-path", str(output), "--tournament", "Fixture", "--concurrency", "1",
+            "--refresh-matches", "--refetch-games"]
+    calls, sleeps = [], []
+
+    async def sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr(MODULE.asyncio, "sleep", sleep)
+
+    class Scraper:
+        recovered = False
+
+        async def get_matches_in_tournament(self, tournament):
+            return [{**header(), "match_id": str(mid)} for mid in range(1, 5)]
+
+        async def get_games_in_match(self, mid):
+            calls.append(mid)
+            if mid == "3":
+                raise ValueError("contradictory team identity")
+            if (mid == "2" and calls.count(mid) < 3) or (mid == "4" and not self.recovered):
+                raise httpx.RemoteProtocolError(
+                    "server disconnected", request=httpx.Request("GET", f"https://gol.gg/game/stats/{mid}/page-summary/"),
+                )
+            return [{**game(mid), "match_id": mid}]
+
+    scraper = Scraper()
+    assert asyncio.run(MODULE.collect(MODULE.parse_args(argv), scraper, {})) == 2
+    assert calls == ["1", "2", "3", "4", "2", "4", "2", "4", "4"]
+    assert sleeps == [2, 5, 10]
+    manifest = json.loads(output.with_suffix(".manifest.json").read_text())
+    assert manifest["counts"]["errored_matches"] == 1
+    assert manifest["counts"]["unresolved_matches"] == 1
+    assert manifest["counts"]["pending_matches"] == 0
+    assert manifest["completeness"]["all_discovered_series_clean"] is False
+    errors = json.loads(output.with_suffix(".errored.json").read_text())
+    assert [row["match_id"] for row in errors] == ["4"]
+    assert errors[0]["attempts"] == 4
+    assert any("/4/page-summary/" in reason for reason in errors[0]["reasons"])
+    assert [row["match_id"] for row in json.loads(output.with_suffix(".quarantine.json").read_text())] == ["3"]
+    clean_before = json.loads(output.read_text())
+    assert {row["match_id"] for row in clean_before} == {"1", "2"}
+    scraper.recovered = True
+    calls.clear()
+    sleeps.clear()
+    assert asyncio.run(MODULE.collect(MODULE.parse_args(argv + ["--resume"]), scraper, {})) == 2
+    assert calls == ["4"]
+    assert sleeps == []
+    assert json.loads(output.with_suffix(".errored.json").read_text()) == []
+    assert json.loads(output.read_text())[:2] == clean_before
+    assert asyncio.run(MODULE.collect(MODULE.parse_args(argv + ["--resume"]), scraper, {})) == 2
+    assert calls == ["4"]
+
+
+def test_interrupted_error_queue_resumes_without_refetching_clean_series(tmp_path):
+    output = tmp_path / "history.json"
+    argv = ["--output-path", str(output), "--tournament", "Fixture", "--concurrency", "1",
+            "--refresh-matches", "--refetch-games"]
+    calls = []
+
+    class Scraper:
+        recovered = False
+
+        async def get_matches_in_tournament(self, tournament):
+            return [{**header(), "match_id": str(mid)} for mid in range(1, 4)]
+
+        async def get_games_in_match(self, mid):
+            calls.append(mid)
+            if not self.recovered:
+                if mid == "2":
+                    raise httpx.ReadTimeout("read stalled")
+                if mid == "3":
+                    raise asyncio.CancelledError()
+            return [{**game(mid), "match_id": mid}]
+
+    scraper = Scraper()
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(MODULE.collect(MODULE.parse_args(argv), scraper, {}))
+    manifest = json.loads(output.with_suffix(".manifest.json").read_text())
+    assert manifest["status"] == "interrupted"
+    assert {key: manifest["counts"][key] for key in
+            ("clean_matches", "errored_matches", "pending_matches")} == {
+                "clean_matches": 1, "errored_matches": 1, "pending_matches": 1,
+            }
+    scraper.recovered = True
+    calls.clear()
+    assert asyncio.run(MODULE.collect(MODULE.parse_args(argv + ["--resume"]), scraper, {})) == 0
+    assert calls == ["2", "3"]
+    clean = json.loads(output.read_text())
+    calls.clear()
+    assert asyncio.run(MODULE.collect(MODULE.parse_args(argv + ["--resume"]), scraper, {})) == 0
+    assert calls == []
+    assert json.loads(output.read_text()) == clean
+
+
+def test_sustained_transport_outage_stops_without_exhausting_the_history(tmp_path):
+    output = tmp_path / "history.json"
+    args = MODULE.parse_args(["--output-path", str(output), "--tournament", "Fixture", "--concurrency", "1"])
+    calls = []
+
+    class Scraper:
+        async def get_matches_in_tournament(self, tournament):
+            return [{**header(), "match_id": str(mid)} for mid in range(25)]
+
+        async def get_games_in_match(self, mid):
+            calls.append(mid)
+            raise httpx.RemoteProtocolError("server disconnected")
+
+    with pytest.raises(httpx.RemoteProtocolError):
+        asyncio.run(MODULE.collect(args, Scraper(), {}))
+    assert calls == [str(mid) for mid in range(20)]
+    manifest = json.loads(output.with_suffix(".manifest.json").read_text())
+    assert manifest["status"] == "interrupted"
+    assert manifest["counts"]["errored_matches"] == 20
+    assert manifest["counts"]["pending_matches"] == 5
+    assert json.loads(output.with_suffix(".quarantine.json").read_text()) == []
+
+
+def test_failed_discovery_resume_preserves_unchanged_quarantine_evidence(tmp_path):
+    output = tmp_path / "history.json"
+    argv = ["--output-path", str(output), "--tournament", "Fixture"]
+    calls = []
+
+    class Scraper:
+        failed_rows = [{"tournament_name": "Fixture", "error": "another row has no match ID", "html": "<tr/>"}]
+
+        async def get_matches_in_tournament(self, tournament):
+            return [header((2, 0))]
+
+        async def get_games_in_match(self, mid):
+            calls.append(mid)
+            return [game()]
+
+    scraper = Scraper()
+    assert asyncio.run(MODULE.collect(MODULE.parse_args(argv), scraper, {})) == 2
+    quarantine = json.loads(output.with_suffix(".quarantine.json").read_text())
+    assert quarantine[0]["match"]["games"][0]["game_id"] == "1"
+    assert json.loads(output.with_suffix(".manifest.json").read_text())["counts"]["discovery_failures"] == 1
+    scraper.failed_rows = []
+    assert asyncio.run(MODULE.collect(MODULE.parse_args(argv + ["--resume"]), scraper, {})) == 2
+    assert calls == ["1"]
+    assert json.loads(output.with_suffix(".quarantine.json").read_text()) == quarantine
