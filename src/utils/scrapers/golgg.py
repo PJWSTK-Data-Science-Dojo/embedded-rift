@@ -19,6 +19,18 @@ INDEX_TO_ROLE = {
 GAME_FETCH_RETRIES = 3
 
 
+async def _gather_owned(*coroutines):
+    """Settle every child before returning a result, error, or cancellation."""
+    tasks = [asyncio.create_task(coroutine) for coroutine in coroutines]
+    try:
+        return await asyncio.gather(*tasks)
+    except BaseException:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
+
+
 def extract_champion_from_player_row(player_row: parsel.Selector) -> dict:
     """Extract champion metadata from a GOL.gg player row."""
     champion_links = player_row.css('a[href*="champion/champion-stats"]')
@@ -59,10 +71,28 @@ def infer_best_of(t1_score: int, t2_score: int) -> int | None:
     return (wins_needed * 2) - 1
 
 
+def score_for_link_order(team_a, team_b, result_left_team, result_right_team, score_left, score_right):
+    """Align score cells by identity, never by a presumed winner-first layout."""
+    def normalized(name):
+        return re.sub(r"[^a-z0-9]+", "", (name or "").lower())
+
+    a, b, left, right = map(normalized, (team_a, team_b, result_left_team, result_right_team))
+    direct = bool((left and left == a) or (right and right == b))
+    reverse = bool((right and right == a) or (left and left == b))
+    if direct == reverse:
+        return score_left, score_right, "unresolved"
+    if reverse:
+        return score_right, score_left, "reversed"
+    return score_left, score_right, "direct"
+
+
 class GolggScraper:
-    def __init__(self, max_pages: int = 20):
+    def __init__(self, max_pages: int = 20, *, source_corrections: dict | None = None):
         self.semaphore = asyncio.Semaphore(max_pages)
         self.client: httpx.AsyncClient | None = None
+        self.source_corrections = source_corrections or {}
+        self.failed_rows = []
+        self.unplayed_rows = []
 
     async def start(self, headless: bool = True) -> Self:
         self.client = httpx.AsyncClient(
@@ -89,10 +119,11 @@ class GolggScraper:
         await self.stop()
 
     async def get_tournaments_in_season(self, season: int = 9) -> list[dict]:
-        response = await self.client.post(
-            GOLGG_TOURNAMENT_API,
-            data={"season": f"S{season}"},
-        )
+        async with self.semaphore:
+            response = await self.client.post(
+                GOLGG_TOURNAMENT_API,
+                data={"season": f"S{season}"},
+            )
         response.raise_for_status()
         data = response.json()
         return data
@@ -112,7 +143,8 @@ class GolggScraper:
 
         url = f"{GOLGG_URL}/tournament/{s}"
 
-        response = await self.client.get(url)
+        async with self.semaphore:
+            response = await self.client.get(url)
         response.raise_for_status()
         html = response.content.decode("utf-8")
 
@@ -123,14 +155,14 @@ class GolggScraper:
         )
 
         if not matches_table:
-            print("Couldn't find games table in", url)
-            return []
+            raise ValueError(f"Missing games table in {url}")
 
         # Extract links and match IDs
         rows = matches_table.css("tbody tr")
         matches = []
 
         for row in rows:
+            match_id = None
             try:
                 href = row.css("a::attr(href)").get()
 
@@ -153,27 +185,29 @@ class GolggScraper:
                 team_b = team_b.strip()
                 won = row.css("td.text_victory::text").get()
                 lost = row.css("td.text_defeat::text").get()
+                cells = row.css("td")
+                result_left_team = cells[1].xpath("string(.)").get().strip()
+                result_right_team = cells[3].xpath("string(.)").get().strip()
                 score = row.css("td:nth-child(3)::text").get()
-                if not score or "-" not in score:
+                if "/page-preview/" in href and not won and not lost and (
+                    not score or not score.replace("-", "").strip()
+                ):
+                    self.unplayed_rows.append({
+                        "match_id": match_id, "tournament_name": tournament_name,
+                        "url": url, "html": row.get(),
+                    })
                     continue
+                if not score or "-" not in score:
+                    raise ValueError("Missing completed match result")
                 score = score.strip()
 
                 score_left, score_right = score.split("-")
                 score_left = int(score_left.strip())
                 score_right = int(score_right.strip())
 
-                # GOL.gg renders the score as winner-loser, not always as
-                # team_a-team_b. Normalize it back to the order from
-                # "team_a vs team_b" so downstream code can trust t1/t2_score.
-                if won == team_a:
-                    team_a_score = score_left
-                    team_b_score = score_right
-                elif won == team_b:
-                    team_a_score = score_right
-                    team_b_score = score_left
-                else:
-                    team_a_score = score_left
-                    team_b_score = score_right
+                team_a_score, team_b_score, score_alignment = score_for_link_order(
+                    team_a, team_b, result_left_team, result_right_team, score_left, score_right
+                )
 
                 patch = row.css("td:nth-child(6)::text").get()
                 date = row.css("td:nth-child(7)::text").get()
@@ -186,6 +220,11 @@ class GolggScraper:
                     "won": won,
                     "lost": lost,
                     "score": score,
+                    "result_left_team": result_left_team,
+                    "result_right_team": result_right_team,
+                    "score_left": score_left,
+                    "score_right": score_right,
+                    "score_alignment": score_alignment,
                     "t1_score": team_a_score,
                     "t2_score": team_b_score,
                     "games_played": team_a_score + team_b_score,
@@ -199,6 +238,7 @@ class GolggScraper:
             except Exception as e:
                 print("Error processing row:", e)
                 failed.append(row.get())
+                self.failed_rows.append({"match_id": match_id, "tournament_name": tournament_name, "url": url, "html": row.get(), "error": str(e)})
                 continue
             matches.append(data)
         if failed:
@@ -226,7 +266,9 @@ class GolggScraper:
         html = response.content.decode("utf-8")
         sel = parsel.Selector(text=html)
         table = sel.css(".completestats")
-        rows = table.xpath("./tr")
+        rows = table.xpath("./tr | ./tbody/tr")
+        if not rows:
+            raise ValueError(f"Game {game_id}: missing full player statistics")
         result = {
             "blue": {
                 "TOP": {},
@@ -246,6 +288,8 @@ class GolggScraper:
 
         for row in rows:
             tds = row.css("td::text").getall()
+            if not tds:
+                continue
             title, *stats = tds
             title = title.strip()
             title = title.replace(" ", "_").replace(":", "").replace("'", "").lower()
@@ -275,60 +319,93 @@ class GolggScraper:
 
         return result
 
-    async def get_players_in_game(self, game_sel: parsel.Selector) -> dict[str, dict]:
-        """Get the players in a game."""
+    def _game_identity(self, game_sel: parsel.Selector, game_id: str | None = None) -> dict:
+        """Resolve actual map sides, permitting only expectation-guarded evidence overrides."""
+        raw = {}
+        tables = game_sel.css(".playersInfosLine")
+        if len(tables) != 2:
+            raise ValueError(f"Game {game_id}: expected two side rosters")
+        for side, table in zip(("blue", "red"), tables):
+            header = game_sel.css(f".col-cadre .{side}-line-header")
+            links = header.css('a[href*="teams/team-stats/"]')
+            if len(links) != 1:
+                raise ValueError(f"Game {game_id}: missing or ambiguous {side} identity")
+            team_match = re.search(r"teams/team-stats/(\d+)/", links[0].attrib["href"])
+            if not team_match:
+                raise ValueError(f"Game {game_id}: invalid {side} team ID")
+            raw[f"{side}_id"] = team_match.group(1)
+            raw[f"{side}_name"] = links[0].xpath("string(.)").get().strip()
+            # WIN/LOSS is a trailing label on the actual side header, not summary CSS.
+            outcome = re.search(r"-\s*(WIN|LOSS)\s*$", header.xpath("string(.)").get().strip(), re.I)
+            raw[f"{side}_win"] = outcome.group(1).upper() == "WIN" if outcome else None
+            raw[f"{side}_player_ids"] = [
+                re.search(r"player-stats/(\d+)/", href).group(1)
+                for href in table.css('a[href*="players/player-stats/"]::attr(href)').getall()
+            ]
+        identity = dict(raw)
+        correction = self.source_corrections.get("games", {}).get(str(game_id))
+        if correction is not None:
+            if not isinstance(correction.get("provenance"), dict) or not correction["provenance"]:
+                raise ValueError(f"Game {game_id}: correction requires evidence provenance")
+            expected = correction.get("expected", {})
+            if set(expected) != set(raw):
+                raise ValueError(f"Game {game_id}: correction requires a complete original identity snapshot")
+            for key, actual in raw.items():
+                wanted = expected[key]
+                matches = sorted(wanted) == sorted(actual) if key.endswith("_player_ids") else wanted == actual
+                if not matches:
+                    raise ValueError(f"Game {game_id}: correction expectation mismatch for {key}")
+            corrected = correction.get("corrected", {})
+            allowed = {"blue_id", "red_id", "blue_name", "red_name", "blue_win", "red_win"}
+            if not corrected or not set(corrected) <= allowed:
+                raise ValueError(f"Game {game_id}: invalid correction fields")
+            identity.update(corrected)
+        if identity["blue_id"] == identity["red_id"]:
+            raise ValueError(f"Game {game_id}: duplicate team IDs; distinct sides require verified source correction")
+        for side in ("blue", "red"):
+            if not isinstance(identity[f"{side}_id"], str) or not identity[f"{side}_id"].isdigit():
+                raise ValueError(f"Game {game_id}: invalid corrected team ID")
+            if not isinstance(identity[f"{side}_name"], str) or not identity[f"{side}_name"].strip():
+                raise ValueError(f"Game {game_id}: missing team name")
+            players = identity[f"{side}_player_ids"]
+            if len(players) != 5 or len(set(players)) != 5:
+                raise ValueError(f"Game {game_id}: {side} requires five distinct players")
+        if set(identity["blue_player_ids"]) & set(identity["red_player_ids"]):
+            raise ValueError(f"Game {game_id}: opposing rosters share player IDs")
+        if any(type(identity[f"{side}_win"]) is not bool for side in ("blue", "red")):
+            raise ValueError(f"Game {game_id}: missing side winner flags")
+        if identity["blue_win"] == identity["red_win"]:
+            raise ValueError(f"Game {game_id}: contradictory side winner flags")
+        return {**identity, "raw": raw, "correction": correction}
 
-        team_table = game_sel.css(".col-cadre")[0]
-        team_row = team_table.xpath("./*")[1]
-        team_1_block, team_2_block = team_row.xpath("./*")
-        team_1_info = team_1_block.xpath("./*")[0]
-        team_2_info = team_2_block.xpath("./*")[0]
-        team_1_link = team_1_info.css("a::attr(href)").get()
-        team_2_link = team_2_info.css("a::attr(href)").get()
-        team_1_id = re.search(r"teams/team-stats/(\d+)/", team_1_link).group(1)
-        team_2_id = re.search(r"teams/team-stats/(\d+)/", team_2_link).group(1)
+    async def get_players_in_game(self, game_sel: parsel.Selector, *, game_id: str | None = None) -> dict[str, dict]:
+        """Return separate, validated side rosters keyed by actual map team IDs."""
+        identity = self._game_identity(game_sel, game_id)
+        team_1_id, team_2_id = identity["blue_id"], identity["red_id"]
         t1_players_table, t2_players_table = game_sel.css(".playersInfosLine")
-        t1_players = t1_players_table.xpath("./tr")
-        t2_players = t2_players_table.xpath("./tr")
-        team_1 = {}
-        for i, player in enumerate(t1_players):
-            player_td = player.css("td")[0]
-            champion_data = extract_champion_from_player_row(player)
-            player_link = player_td.css("a")[1]
-            href = player_link.css("::attr(href)").get()
-            player_name = player_link.css("::text").get()
-            player_id = re.search(r"player-stats/(\d+)/", href).group(1)
-            player_data = {
-                "player_id": player_id,
-                "player_name": player_name,
-                **champion_data,
-            }
-            role = INDEX_TO_ROLE.get(i, "UNKNOWN")
-            team_1[role] = player_data
 
-        team_2 = {}
-        for i, player in enumerate(t2_players):
-            player_td = player.css("td")[0]
-            champion_data = extract_champion_from_player_row(player)
-            player_link = player_td.css("a")[1]
-            href = player_link.css("::attr(href)").get()
-            player_name = player_link.css("::text").get()
-
-            player_id = re.search(r"player-stats/(\d+)/", href).group(1)
-            player_data = {
-                "player_id": player_id,
-                "player_name": player_name,
-                **champion_data,
-            }
-            role = INDEX_TO_ROLE.get(i, "UNKNOWN")
-            team_2[role] = player_data
+        def parse_players(rows: list[parsel.Selector]) -> dict[str, dict]:
+            players = {}
+            for i, player in enumerate(rows):
+                player_td = player.css("td")[0]
+                champion_data = extract_champion_from_player_row(player)
+                player_link = player_td.css('a[href*="players/player-stats/"]')[0]
+                href = player_link.css("::attr(href)").get()
+                player_id_match = re.search(r"player-stats/(\d+)/", href or "")
+                role = INDEX_TO_ROLE.get(i, "UNKNOWN")
+                players[role] = {
+                    "player_id": player_id_match.group(1) if player_id_match else None,
+                    "player_name": player_link.css("::text").get(),
+                    **champion_data,
+                }
+            return players
 
         return {
-            team_1_id: team_1,
-            team_2_id: team_2,
+            team_1_id: parse_players(t1_players_table.xpath("./tr | ./tbody/tr")),
+            team_2_id: parse_players(t2_players_table.xpath("./tr | ./tbody/tr")),
         }
 
-    async def get_team_stats(self, game_sel: parsel.Selector) -> dict[str, dict]:
+    async def get_team_stats(self, game_sel: parsel.Selector, *, game_id: str | None = None) -> dict[str, dict]:
         result = {
             "blue_id": None,
             "red_id": None,
@@ -360,12 +437,9 @@ class GolggScraper:
         blue, red = stats_row.xpath("./*")
         bteam, bstats, champions = blue.xpath("./*")
         rteam, rstats, _ = red.xpath("./*")
-        bteam_id = bteam.css("a::attr(href)").get().strip()
-        rteam_id = rteam.css("a::attr(href)").get().strip()
-        bteam_id = re.search(r"teams/team-stats/(\d+)/", bteam_id).group(1)
-        rteam_id = re.search(r"teams/team-stats/(\d+)/", rteam_id).group(1)
-        result["blue_id"] = bteam_id
-        result["red_id"] = rteam_id
+        identity = self._game_identity(game_sel, game_id)
+        result["blue_id"] = identity["blue_id"]
+        result["red_id"] = identity["red_id"]
 
         kills, towers, dragons, nashors, gold, _ = bstats.xpath("./*")
         kills = kills.css("span::text").get().strip()
@@ -412,111 +486,83 @@ class GolggScraper:
 
         return result
 
-    async def get_games_in_match(self, match_id):
-        """Get the games ids in a match."""
-        s = f"/game/stats/{match_id}/page-summary/"
-        url = f"{GOLGG_URL}{s}"
+    async def get_games_in_match(self, match_id: str) -> list[dict]:
+        """Return every listed map in actual blue/red order, or reject the series."""
+        if not self.client:
+            raise RuntimeError("GolggScraper is not started")
+        url = f"{GOLGG_URL}/game/stats/{match_id}/page-summary/"
         async with self.semaphore:
             response = await self.client.get(url)
         response.raise_for_status()
-        html = response.content.decode("utf-8")
-
-        sel = parsel.Selector(text=html)
-        navbar = sel.css("#gameMenuToggler")
-        if not navbar:
-            print("Couldn't find navbar in", url)
-            return []
-
+        sel = parsel.Selector(text=response.content.decode("utf-8"))
         game_links = [
-            el
-            for el in navbar.css("li > a")
-            if el.css("::text").get().strip().lower().startswith("game")
+            link for link in sel.css("#gameMenuToggler li > a")
+            if re.fullmatch(r"Game\s+\d+", link.xpath("string(.)").get().strip(), re.I)
         ]
-        match_tables = sel.css(".col-cadre")
-        if not match_tables:
-            print("Couldn't find match table in", url)
-            return []
-        match_table = match_tables[0]
-        teams, *games_sel = match_table.xpath("./*")
-        t1_link, t2_link = teams.css("a")
-        t1_href = t1_link.css("::attr(href)").get()
-        t2_href = t2_link.css("::attr(href)").get()
-        pattern = r"teams/team-stats/(\d+)/"
-        t1_id = re.search(pattern, t1_href).group(1)
-        t2_id = re.search(pattern, t2_href).group(1)
-        t1_name = t1_link.css("::text").get()
-        t2_name = t2_link.css("::text").get()
-        async def process_game(i: int, game_sel: parsel.Selector) -> dict | None:
+        game_ids = []
+        for link in game_links:
+            found = re.search(r"game/stats/(\d+)/", link.attrib.get("href", ""))
+            if not found:
+                raise ValueError(f"Match {match_id}: invalid game link")
+            game_ids.append(found.group(1))
+        # BO1 summary URLs may redirect to the map page instead.
+        if not game_ids and sel.css(".playersInfosLine"):
+            game_ids = [str(match_id)]
+        if not game_ids or len(set(game_ids)) != len(game_ids):
+            raise ValueError(f"Match {match_id}: missing or duplicate game IDs")
+        if not sel.css(".playersInfosLine"):
+            tables = sel.css(".col-cadre")
+            if not tables or len(tables[0].xpath("./*")) - 1 != len(game_ids):
+                raise ValueError(f"Match {match_id}: summary map rows do not match game links")
+        cadres = sel.css(".col-cadre")
+        header_text = cadres[0].xpath("./*[1]").xpath("string(.)").get() if cadres else ""
+        formats = set(re.findall(r"\bBO\s*(\d+)\b", header_text or "", re.I))
+        if len(formats) != 1 or int(next(iter(formats))) < 1:
+            raise ValueError(f"Match {match_id}: missing or ambiguous source series format")
+        source_best_of = int(next(iter(formats)))
+
+        async def process_game(game_id: str) -> dict:
             for attempt in range(1, GAME_FETCH_RETRIES + 1):
                 try:
-                    return await process_game_attempt(i, game_sel)
-                except Exception as e:
-                    print(
-                        f"Error processing game {i + 1} in match {match_id} "
-                        f"attempt {attempt}/{GAME_FETCH_RETRIES}: {e}"
+                    game_page_sel, pstats = await _gather_owned(
+                        self.get_game_selector(game_id),
+                        self.get_players_stats(game_id=game_id),
                     )
-                    if attempt < GAME_FETCH_RETRIES:
-                        await asyncio.sleep(attempt)
-            return None
-
-        async def process_game_attempt(
-            i: int, game_sel: parsel.Selector
-        ) -> dict | None:
-            if i >= len(game_links):
-                print(f"Missing game link {i + 1} for match {match_id}")
-                return None
-
-            team_1, _, team_2 = game_sel.xpath("./*")
-            game_link = game_links[i]
-            game_href = game_link.css("::attr(href)").get()
-            pattern = r"game/stats/(\d+)/"
-            game_match = re.search(pattern, game_href or "")
-            if not game_match:
-                print("Couldn't extract game id from", game_href)
-                return None
-            game_id = game_match.group(1)
-            t1_win = bool(team_1.css(".text_victory"))
-
-            game_page_sel, pstats = await asyncio.gather(
-                self.get_game_selector(game_id),
-                self.get_players_stats(game_id=game_id),
-            )
-            tstats = await self.get_team_stats(game_sel=game_page_sel)
-            t1_side = "blue" if t1_id == tstats["blue_id"] else "red"
-            t2_side = "red" if t1_side == "blue" else "blue"
-
-            players = await self.get_players_in_game(game_sel=game_page_sel)
-            for role, player in players[t1_id].items():
-                player["stats"] = pstats[t1_side][role]
-
-            for role, player in players[t2_id].items():
-                player["stats"] = pstats[t2_side][role]
-
+                    break
+                except httpx.HTTPError:
+                    if attempt == GAME_FETCH_RETRIES:
+                        raise
+                    await asyncio.sleep(attempt)
+            identity = self._game_identity(game_page_sel, game_id)
+            tstats = await self.get_team_stats(game_sel=game_page_sel, game_id=game_id)
+            players = await self.get_players_in_game(game_sel=game_page_sel, game_id=game_id)
+            for side in ("blue", "red"):
+                for role, player in players[identity[f"{side}_id"]].items():
+                    player["stats"] = pstats[side][role]
             return {
                 "game_id": game_id,
-                "match_id": match_id,
-                "t1_id": t1_id,
-                "t2_id": t2_id,
-                "t1_name": t1_name,
-                "t2_name": t2_name,
-                "t1_win": t1_win,
-                "t2_win": not t1_win,
+                "match_id": str(match_id),
+                "t1_id": identity["blue_id"],
+                "t2_id": identity["red_id"],
+                "t1_name": identity["blue_name"],
+                "t2_name": identity["red_name"],
+                "t1_win": identity["blue_win"],
+                "t2_win": identity["red_win"],
                 "draw": False,
-                "t1_side": t1_side,
-                "t2_side": t2_side,
-                "t1_players": players[t1_id],
-                "t2_players": players[t2_id],
-                "t1_stats": tstats[t1_side],
-                "t2_stats": tstats[t2_side],
+                "t1_side": "blue",
+                "t2_side": "red",
+                "t1_players": players[identity["blue_id"]],
+                "t2_players": players[identity["red_id"]],
+                "t1_stats": tstats["blue"],
+                "t2_stats": tstats["red"],
                 "game_duration": tstats["gameDuration"],
+                "source_game_ids": game_ids,
+                "source_best_of": source_best_of,
+                "source_identity": identity["raw"],
+                "source_correction": identity["correction"],
             }
 
-        game_results = await asyncio.gather(
-            *(process_game(i, game_sel) for i, game_sel in enumerate(games_sel))
-        )
-        games = [game for game in game_results if game]
-
-        return games
+        return await _gather_owned(*(process_game(game_id) for game_id in game_ids))
 
     async def get_team_players(self, team_id: str) -> list[dict]:
         """Get the players in a team."""
